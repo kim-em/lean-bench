@@ -6,9 +6,7 @@ import LeanBench
 Two implementations of Fibonacci, both benchmarked.
 
 - `goodFib` — linear bottom-up over `UInt64` (constant per-step).
-   Declared complexity `n + 1`; the `+ 1` absorbs constant wrapper
-   overhead so the verdict comes out clean across the doubling
-   ladder.
+   Declared complexity `n`.
 - `badFib`  — naive doubly-recursive over `Nat`. Declared complexity
    `2 ^ n`. The verdict is `inconclusive` — the actual cost is
    `Θ(φ ^ n)` (golden ratio), and `2 ^ n` overestimates by a
@@ -40,7 +38,7 @@ def badFib : Nat → Nat
   | 1 => 1
   | n + 2 => badFib n + badFib (n + 1)
 
-setup_benchmark goodFib n => n + 1
+setup_benchmark goodFib n => n
 setup_benchmark badFib  n => 2 ^ n
 
 end LeanBench.Examples.Fib

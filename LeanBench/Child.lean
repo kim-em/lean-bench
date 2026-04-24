@@ -23,21 +23,23 @@ open Lean
 
 namespace LeanBench
 
-/-- Auto-tuning loop: run the function once, then keep doubling the
-inner repeat count until total wall time ≥ `targetNanos / 2`.
+/-- Auto-tuning loop: call `runner count param` once (the loop body
+lives inside the runner so the function-under-test can be inlined
+into it), keep doubling `count` until total wall time ≥ `targetNanos
+/ 2`.
 
-Returns `(innerRepeats, totalNanos, lastResultHash)`. -/
+Returns `(innerRepeats, totalNanos, lastResultHash)`. The hash is
+whatever the runner reports — present iff the function's return type
+has a `Hashable` instance. -/
 partial def autoTune
-    (runner : Nat → IO (Option UInt64))
+    (runner : Nat → Nat → IO (Option UInt64))
     (param : Nat)
     (targetNanos : Nat) :
     IO (Nat × Nat × Option UInt64) := do
   let halfTarget := targetNanos / 2
   let rec runN (n : Nat) : IO (Nat × Option UInt64) := do
     let t₀ ← IO.monoNanosNow
-    let mut hash : Option UInt64 := none
-    for _ in [0:n] do
-      hash := ← runner param
+    let hash ← runner n param
     let t₁ ← IO.monoNanosNow
     return (t₁ - t₀, hash)
   let mut count := 1

@@ -25,6 +25,27 @@ open Lean
 
 namespace LeanBench
 
+/-! ## Black-box (defeat dead-code elimination)
+
+The Lean compiler will happily lift `f param` out of a tight loop when
+`f` is pure and `param` is loop-invariant. That collapses our
+N-iteration timing batch into one call's worth of work. To stop it,
+we route every per-iteration result through a `@[noinline]` consumer
+that the compiler must treat as opaque: the call site can't be
+elided, so the argument computation can't be elided either.
+
+The body itself is a single `IO.Ref.modify`; the ref is private and
+its accumulated value is never read, so this is essentially free at
+runtime (a few ns per call) but kills LICM / CSE on the hot loop. -/
+
+private initialize blackBoxRef : IO.Ref UInt64 ← IO.mkRef 0
+
+/-- Opaque consumer used by generated benchmark loops. `@[noinline]`
+forces the compiler to emit a real call, which forces the argument
+to be computed. The accumulator is never observed externally. -/
+@[noinline] def blackBox (a : UInt64) : IO Unit :=
+  blackBoxRef.modify (· ^^^ a)
+
 /-! ## Compile-time registry -/
 
 initialize benchSpecExt : SimplePersistentEnvExtension BenchmarkSpec (Array BenchmarkSpec) ←
@@ -52,7 +73,12 @@ def allSpecs (env : Environment) : Array BenchmarkSpec :=
     function and its complexity model. -/
 structure RuntimeEntry where
   spec       : BenchmarkSpec
-  runner     : Nat → IO (Option UInt64)
+  /-- Runs the function under test `count` times at parameter `param`,
+      then returns the hash of the last result (when the return type
+      has `Hashable`) or `none`. The whole loop happens *inside* this
+      single call so the compiler can inline the function-under-test
+      into the loop body — no per-iteration closure indirection. -/
+  runner     : (count : Nat) → (param : Nat) → IO (Option UInt64)
   complexity : Nat → Nat
   deriving Inhabited
 
@@ -82,7 +108,7 @@ not call the two halves directly.
 -/
 def register
     (spec : BenchmarkSpec)
-    (runner : Nat → IO (Option UInt64))
+    (runner : (count : Nat) → (param : Nat) → IO (Option UInt64))
     (complexity : Nat → Nat) :
     IO Unit :=
   runtimeRegistry.modify (·.insert spec.name { spec, runner, complexity })

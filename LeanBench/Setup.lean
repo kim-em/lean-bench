@@ -101,16 +101,27 @@ def elabSetupBenchmark : CommandElab := fun stx => do
     -- (1) auto-def the complexity function.
     elabCommand <| ← `(command|
       def $cIdent : Nat → Nat := fun $argId => $complexityTerm)
-    -- (2) auto-def runChecked (different body depending on Hashable α).
+    -- (2) auto-def the specialised loop runner. The loop body lives
+    -- in this generated def so the Lean compiler can inline the
+    -- function under test directly into it (no closure indirection,
+    -- no per-iteration Hashable / Option wrap on the hot path).
     if isHashable then
       elabCommand <| ← `(command|
-        def $rIdent (n : Nat) : IO (Option UInt64) := do
-          let r := $fnId n
-          return some (Hashable.hash r))
+        @[inline] def $rIdent (count param : Nat) : IO (Option UInt64) := do
+          if count = 0 then return none
+          let mut last : UInt64 := 0
+          for _ in [0:count] do
+            let r := $fnId param
+            last := Hashable.hash r
+            LeanBench.blackBox last
+          return some last)
     else
       elabCommand <| ← `(command|
-        def $rIdent (n : Nat) : IO (Option UInt64) := do
-          let _ := $fnId n
+        @[inline] def $rIdent (count param : Nat) : IO (Option UInt64) := do
+          if count = 0 then return none
+          for _ in [0:count] do
+            let r := $fnId param
+            LeanBench.blackBox (Hashable.hash (sizeOf r))
           return none)
     -- (3) emit an `initialize` block that puts the runtime closure
     --     into the IO.Ref registry.

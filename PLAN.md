@@ -8,44 +8,6 @@ verdict, and the `Fib` / `Sort` / `BinarySearch` examples.
 This file enumerates the post-v0.1 features. None are required for
 the library to be useful as-is. Order is rough priority.
 
-## F-1. Specialised inner-timing loop (eliminate per-call indirection)
-
-v0.1's child times `for _ in [0:count] do hash := ← runner param`,
-where `runner : Nat → IO (Option UInt64)` is a closure looked up
-from `runtimeRegistry` (an `IO.Ref Std.HashMap`). Each iteration
-pays for:
-
-- one indirect call through the hashmap-stored closure (≥10 ns)
-- one `Hashable.hash` on the result
-- `Option` wrap + IO/RealWorld threading
-
-For functions whose true per-call work is small (UInt64 fib at
-n ~ 2: ~5 ns), this floor dominates the measurement. Observed at
-n=2 in the Fib example: 43 ns/call, ~38 ns of which is harness
-machinery. Today the README hides this by declaring complexity
-`n + 1` (the `+ 1` absorbs the constant); honest, but misleading,
-and it shouldn't be necessary.
-
-Fix: have `setup_benchmark` emit a specialised runner
-
-```lean
-def runMany (count param : Nat) : IO (Option UInt64) := Id.run do
-  let mut last := myFib param
-  for _ in [1:count] do
-    last := myFib param
-  return some (Hashable.hash last)
-```
-
-The child calls `runMany count param` *once*. The compiler can
-inline `myFib` into the loop body. Per-iteration overhead drops to
-~the cost of one Lean `for` step (a few ns), and the hash is done
-once at the end, not per iteration.
-
-Acceptance: re-running the Fib example with declared complexity
-`n` (no `+ 1` fudge) lands `consistentWithDeclaredComplexity`
-across the same param range; small-n per-call times approach the
-true work cost (single-digit ns) instead of being floored at ~40 ns.
-
 ## F0. Pure-Lean cross-platform kill
 
 v0.1 enforces `maxSecondsPerCall` by spawning the child under GNU

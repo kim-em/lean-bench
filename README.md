@@ -18,21 +18,21 @@ Builds the library + examples and runs a linear-Fibonacci benchmark
 over params `0, 1, 2, 4, 8, …, 134_217_728`. Tail of the output:
 
 ```
-   16384  90.035 µs   ×4096  C=5.494
-   32768 194.863 µs   ×2048  C=5.946
-   65536 385.797 µs   ×1024  C=5.886
-  131072 757.285 µs    ×512  C=5.777
-  262144   1.617 ms    ×256  C=6.167
-  524288   3.241 ms    ×128  C=6.181
- 1048576   6.432 ms     ×64  C=6.133
+   32768 186.988 µs  ×2048  C=5.706
+   65536 388.242 µs  ×1024  C=5.924
+  131072 748.856 µs   ×512  C=5.713
+  262144   1.499 ms   ×256  C=5.718
+  524288   3.114 ms   ×128  C=5.938
+ 1048576   5.993 ms    ×64  C=5.715
  …
-verdict: consistentWithDeclaredComplexity (cMin=5.494, cMax=14.506)
+verdict: consistentWithDeclaredComplexity (cMin=5.408, cMax=19.981)
 ```
 
 `goodFib` is declared as `O(n)`; observed per-call time scales
 linearly across 22 doublings (n=2 through n=134M); `C` stabilises
-near 5.9 ns per iteration once the param is large enough that
-constant wrapper overhead amortises.
+near 5.7 ns per iteration once the param is large enough that the
+small fixed per-call cost (loop frame, hash, the noinline black box
+that defeats dead-code elimination) amortises.
 
 ## Use it in your project
 
