@@ -8,25 +8,33 @@ declared complexity.
 ```lean
 import LeanBench
 
-def goodFib : Nat → Nat
-  | 0 => 0
-  | 1 => 1
-  | n + 2 => goodFib n + goodFib (n + 1)
+def goodFib (n : Nat) : Nat :=
+  let rec go (k : Nat) (a b : Nat) : Nat :=
+    if k = 0 then a else go (k - 1) b (a + b)
+  go n 0 1
 
-setup_benchmark goodFib n => 2 ^ n
+-- Lean's Nat is bignum, so each step's addition costs O(n) bit ops;
+-- total is O(n²). See examples/Fib/Fib.lean for why the model isn't
+-- just `n`.
+setup_benchmark goodFib n => n * n
 ```
 
 ```bash
 $ lake exe fib run goodFib
-goodFib   complexity=2^n
-  param  per-call         C
-  0      … µs              —
-  1      … µs              —
-  4      … µs              0.94
-  8      … µs              1.02
- 16      … µs              1.01
- verdict: consistentWithDeclaredComplexity (cMin=0.94, cMax=1.02)
+goodFib   complexity=goodFib._leanBench_complexity
+  param   per-call    repeats  C
+       2 20.000000 ns ×16777216  C=5.142
+       4 19.000000 ns ×16777216  C=1.248
+       8 22.000000 ns ×16777216  C=0.344
+      16 26.000000 ns ×16777216  C=0.103
+      …
+  verdict: inconclusive (cMin=0.003, cMax=5.142)
 ```
+
+The verdict is `inconclusive` here because `n * n` is too pessimistic
+at small n (where the bignum is still one word and arithmetic is
+constant-time). The raw ratios trace the boundary clearly. See
+[doc/quickstart.md](doc/quickstart.md) for how to read them.
 
 ## Status
 
