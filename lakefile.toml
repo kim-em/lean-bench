@@ -1,0 +1,45 @@
+name = "lean-bench"
+version = "0.1.0"
+defaultTargets = ["LeanBench"]
+
+[[require]]
+name = "Cli"
+git = "https://github.com/mhuisi/lean4-cli.git"
+rev = "main"
+
+[[lean_lib]]
+name = "LeanBench"
+
+# --- examples ---
+
+[[lean_lib]]
+name = "Fib"
+srcDir = "examples/Fib"
+roots = ["Fib"]
+
+[[lean_exe]]
+name = "fib"
+srcDir = "examples/Fib"
+root = "Main"
+
+[[lean_lib]]
+name = "Sort"
+srcDir = "examples/Sort"
+roots = ["Sort"]
+
+[[lean_exe]]
+name = "sort"
+srcDir = "examples/Sort"
+root = "Main"
+
+[[lean_exe]]
+name = "binarysearch"
+srcDir = "examples/BinarySearch"
+root = "Main"
+
+# --- tests ---
+
+[[lean_lib]]
+name = "LeanBenchTest"
+srcDir = "test"
+roots = ["SetupErrors", "Roundtrip"]
