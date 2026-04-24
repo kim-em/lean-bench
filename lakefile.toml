@@ -1,6 +1,12 @@
 name = "lean-bench"
 version = "0.1.0"
-defaultTargets = ["LeanBench"]
+defaultTargets = [
+  "LeanBench",
+  "LeanBenchExampleFib", "fib_benchmark_example",
+  "LeanBenchExampleSort", "sort_benchmark_example",
+  "binary_search_benchmark_example",
+  "LeanBenchTest", "roundtrip_benchmark_test",
+]
 
 [[require]]
 name = "Cli"

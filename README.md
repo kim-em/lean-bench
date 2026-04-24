@@ -8,12 +8,14 @@ roughly constant.
 
 ## Try it
 
+From the repo root:
+
 ```
-$ git clone https://github.com/kim-em/lean-bench.git && cd lean-bench && lake build fib_benchmark_example && ./.lake/build/bin/fib_benchmark_example run LeanBench.Examples.Fib.goodFib
+$ lake build && ./.lake/build/bin/fib_benchmark_example run LeanBench.Examples.Fib.goodFib
 ```
 
-That clones, builds, and runs a linear-Fibonacci benchmark over
-params `0, 1, 2, 4, 8, …, 134_217_728`. Tail of the output:
+Builds the library + examples and runs a linear-Fibonacci benchmark
+over params `0, 1, 2, 4, 8, …, 134_217_728`. Tail of the output:
 
 ```
    16384  90.035 µs   ×4096  C=5.494
