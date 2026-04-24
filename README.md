@@ -1,74 +1,54 @@
 # lean-bench
 
-Microbenchmark library for Lean 4. Declare a benchmark, declare its
-expected complexity, run it, and get back ratios `C = observed / expected`
-that should be roughly constant if the implementation matches the
-declared complexity.
+Microbenchmark library for Lean 4. Declare a benchmark and the
+complexity model you expect; run it; the harness reports per-call
+times across a doubling parameter ladder and the ratio
+`C = perCallNanos / complexity(n)`. If your model fits, `C` is
+roughly constant.
 
 ## Try it
 
-Clone, build, run a shipped example. No code to write:
-
-```bash
-$ git clone https://github.com/kim-em/lean-bench.git
-$ cd lean-bench
-$ lake build fib_benchmark_example
-$ ./.lake/build/bin/fib_benchmark_example list
-registered benchmarks:
-  «LeanBench.Examples.Fib.goodFib»  →  complexity = «LeanBench.Examples.Fib.goodFib._leanBench_complexity»
-  «LeanBench.Examples.Fib.badFib»   →  complexity = «LeanBench.Examples.Fib.badFib._leanBench_complexity»
-
-$ ./.lake/build/bin/fib_benchmark_example run LeanBench.Examples.Fib.goodFib
-…
-       2 20.000000 ns ×16777216  C=5.142
-       4 19.000000 ns ×16777216  C=1.248
-       8 22.000000 ns ×16777216  C=0.344
-      16 26.000000 ns ×16777216  C=0.103
-       …
-  524288  0.000000 ns       ×0  C=— [killed at cap]
-  verdict: inconclusive (cMin=0.003, cMax=5.142)
-  per-spawn floor (harness self-measurement): 24.7 ms
+```
+$ git clone https://github.com/kim-em/lean-bench.git && cd lean-bench && lake build fib_benchmark_example && ./.lake/build/bin/fib_benchmark_example run LeanBench.Examples.Fib.goodFib
 ```
 
-The verdict is `inconclusive` because the declared complexity `n*n`
-isn't a great fit at small `n` — the raw ratios trace the boundary
-where the bignum result outgrows one machine word.
+That clones, builds, and runs a linear-Fibonacci benchmark over
+params `0, 1, 2, 4, 8, …, 134_217_728`. Tail of the output:
 
-`compare` is the same shape, side-by-side:
-
-```bash
-$ ./.lake/build/bin/fib_benchmark_example compare \
-    LeanBench.Examples.Fib.goodFib LeanBench.Examples.Fib.badFib
-…
-common params (apples-to-apples): 0, 1, 2, 4, 8
-agreement: all functions agree on common params
+```
+   16384  90.035 µs   ×4096  C=5.494
+   32768 194.863 µs   ×2048  C=5.946
+   65536 385.797 µs   ×1024  C=5.886
+  131072 757.285 µs    ×512  C=5.777
+  262144   1.617 ms    ×256  C=6.167
+  524288   3.241 ms    ×128  C=6.181
+ 1048576   6.432 ms     ×64  C=6.133
+ …
+verdict: consistentWithDeclaredComplexity (cMin=5.494, cMax=14.506)
 ```
 
-Two more examples, same shape:
-
-```bash
-$ lake build sort_benchmark_example binary_search_benchmark_example
-$ ./.lake/build/bin/sort_benchmark_example list
-$ ./.lake/build/bin/binary_search_benchmark_example list
-```
+`goodFib` is declared as `O(n)`; observed per-call time scales
+linearly across 22 doublings (n=2 through n=134M); `C` stabilises
+near 5.9 ns per iteration once the param is large enough that
+constant wrapper overhead amortises.
 
 ## Use it in your project
 
 ```lean
 import LeanBench
 
-def goodFib (n : Nat) : Nat :=
-  let rec go (k : Nat) (a b : Nat) : Nat :=
-    if k = 0 then a else go (k - 1) b (a + b)
-  go n 0 1
+def myFib (n : Nat) : UInt64 := Id.run do
+  let mut a : UInt64 := 0; let mut b : UInt64 := 1
+  for _ in [0:n] do let c := a + b; a := b; b := c
+  return a
 
-setup_benchmark goodFib n => n * n
+setup_benchmark myFib n => n + 1
 
 def main (args : List String) : IO UInt32 :=
   LeanBench.Cli.dispatch args
 ```
 
-Add this to your project's `lakefile.toml`:
+`lakefile.toml`:
 
 ```toml
 [[require]]
@@ -81,8 +61,8 @@ name = "my_benchmarks"
 root = "MyBenchmarks"
 ```
 
-then `lake exe my_benchmarks list / run NAME / compare A B …`. The
-[doc/quickstart.md](doc/quickstart.md) walks through more.
+Then `lake exe my_benchmarks list / run NAME / compare A B …`. See
+[doc/quickstart.md](doc/quickstart.md).
 
 ## Status
 
@@ -102,8 +82,8 @@ Subprocess-per-batch. The CHILD does the timing and the auto-tuned
 inner-repeat loop; the PARENT only spawns, reads JSONL stdout, and
 SIGTERMs the child if a single batch exceeds `--max-seconds-per-call`.
 Why subprocess: Lean has no portable in-process interrupt for
-arbitrary computation, so the only reliable way to enforce a wallclock
-cap is to give each measurement its own process.
+arbitrary computation, so the only reliable way to enforce a
+wallclock cap is to give each measurement its own process.
 
 See [doc/design.md](doc/design.md) for the full architectural
 rationale, including limits and known caveats.

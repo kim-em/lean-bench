@@ -3,44 +3,44 @@ import LeanBench
 /-!
 # Fib example
 
-Three implementations of Fibonacci, all benchmarked side-by-side:
+Two implementations of Fibonacci, both benchmarked.
 
-- `goodFib` — linear bottom-up, O(n)
-- `badFib`  — naive double-recursive, O(2ⁿ)
-- (FFI version deferred to v0.2; the FFI plumbing in `lakefile.toml`
-  needs more attention than v0.1 wants to spend.)
+- `goodFib` — linear bottom-up over `UInt64` (constant per-step).
+   Declared complexity `n + 1`; the `+ 1` absorbs constant wrapper
+   overhead so the verdict comes out clean across the doubling
+   ladder.
+- `badFib`  — naive doubly-recursive over `Nat`. Declared complexity
+   `2 ^ n`. The verdict is `inconclusive` — the actual cost is
+   `Θ(φ ^ n)` (golden ratio), and `2 ^ n` overestimates by a
+   sub-exponential factor. The raw ratios show the gap.
 
-Once you've got these registered with `setup_benchmark`, `lake exe
-fib list` prints the catalogue and `lake exe fib run goodFib` runs
-one of them. (Comparison is on the v0.1 roadmap inside this repo's
-`PLAN.md`.)
+Run them with `lake exe fib_benchmark_example list` /
+`run NAME` / `compare A B`.
 -/
 
 namespace LeanBench.Examples.Fib
 
-/-- Linear Fibonacci, bottom-up. Tail-recursive accumulator. -/
-def goodFib (n : Nat) : Nat :=
-  let rec go (k : Nat) (a b : Nat) : Nat :=
-    if k = 0 then a else go (k - 1) b (a + b)
-  go n 0 1
+/--
+Linear Fibonacci, bottom-up, `UInt64` to keep arithmetic
+constant-per-step. Wraps mod 2^64 for large `n`; that's fine for a
+benchmark, since we only care about timing not numeric value.
+-/
+def goodFib (n : Nat) : UInt64 := Id.run do
+  let mut a : UInt64 := 0
+  let mut b : UInt64 := 1
+  for _ in [0:n] do
+    let c := a + b
+    a := b
+    b := c
+  return a
 
-/-- Doubly-recursive naive Fibonacci. O(2ⁿ). -/
+/-- Doubly-recursive naive Fibonacci over `Nat`. -/
 def badFib : Nat → Nat
   | 0 => 0
   | 1 => 1
   | n + 2 => badFib n + badFib (n + 1)
 
--- Note: Lean's `Nat` is arbitrary-precision, so arithmetic on `Fib n`
--- (which is a number with ~0.7n bits) is *not* free. `goodFib n` does
--- `n` additions of numbers that grow like `Fib n`; each addition costs
--- O(n) bit operations; total is O(n²). Declaring complexity as `n`
--- would produce a growing `C`, which the verdict correctly flags as
--- inconclusive — the harness is doing its job.
-setup_benchmark goodFib n => n * n
-
--- `badFib` has tree-recursive structure. Counting node work: O(Fib n),
--- which is Θ(φⁿ). We round to `2^n` — close enough for what the
--- verdict is checking.
+setup_benchmark goodFib n => n + 1
 setup_benchmark badFib  n => 2 ^ n
 
 end LeanBench.Examples.Fib
