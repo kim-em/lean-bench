@@ -85,8 +85,10 @@ measurement.
 
 ## Caveats
 
-- v0.1 is **Linux/macOS only** (subprocess-kill semantics rely on
-  `timeout(1)`).
+- v0.1 has been tested only on Linux. The wallclock cap relies on
+  GNU coreutils `timeout(1)` being in PATH, so macOS works if you
+  `brew install coreutils`, WSL works, native Windows doesn't. A
+  pure-Lean cross-platform replacement is on the v0.2 list (PLAN.md F0).
 - The verdict is heuristic; the raw `ratios` array is the source of
   truth. See [PLAN.md](../PLAN.md) for v0.2 plans (auto-fit, log-log
   slope, baseline-diff, …).

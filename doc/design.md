@@ -22,9 +22,12 @@ coreutils utility already implements escalation cleanly, handles
 process groups, and tracks exit status conventions (124 = timed out,
 137 = SIGKILL, etc.). Less code, more reliable.
 
-This is **Linux/macOS only**. Windows would need either
-`taskkill /T` shenanigans or a Lean-side timer thread that uses
-Windows-specific APIs. Out of scope for v0.1.
+v0.1 has been tested only on Linux. macOS likely works if you have
+GNU coreutils installed (the `timeout` binary). Native Windows is
+not supported in v0.1 because it doesn't ship `timeout(1)`. None of
+this is fundamental — `IO.Process.Child.kill` exists on every
+platform Lean supports, so a pure-Lean cross-platform implementation
+is just engineering. See PLAN.md F0.
 
 ## Why the timing AND repeat-doubling are in the child
 

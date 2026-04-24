@@ -38,8 +38,15 @@ constant-time). The raw ratios trace the boundary clearly. See
 
 ## Status
 
-v0.1, Linux/macOS only. See [PLAN.md](PLAN.md) for the v0.2+ roadmap
+v0.1, tested on Linux. See [PLAN.md](PLAN.md) for the v0.2+ roadmap
 and [doc/quickstart.md](doc/quickstart.md) for the user guide.
+
+The wallclock cap on each measurement is currently enforced by
+shelling out to GNU coreutils `timeout(1)`. This works on any
+platform with `timeout` in PATH (Linux out of the box; macOS if you
+`brew install coreutils`; Windows under WSL). A pure-Lean
+implementation using `IO.Process.Child.kill` would be cross-platform
+and is on the v0.2 list — see [PLAN.md](PLAN.md).
 
 ## Design
 
@@ -64,3 +71,6 @@ rationale, including limits and known caveats.
 - **Verdict is heuristic.** `consistentWithDeclaredComplexity` is a
   weak label based on `cMax/cMin ≤ 4` over ≥3 data points past
   param=2. The raw ratios are the source of truth.
+- **Cross-platform support is not yet verified.** Only Linux is
+  tested. macOS/WSL likely work if `timeout(1)` is available.
+  Native Windows is not currently supported (see Status above).
