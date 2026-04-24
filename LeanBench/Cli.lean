@@ -3,6 +3,7 @@ import LeanBench.Core
 import LeanBench.Env
 import LeanBench.Run
 import LeanBench.Child
+import LeanBench.Compare
 import LeanBench.Format
 
 /-!
@@ -47,6 +48,15 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   IO.println (Format.fmtResult result)
   return 0
 
+def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
+  let names := p.variableArgsAs! String |>.toList
+  if names.isEmpty then
+    IO.eprintln "compare: need at least two benchmark names"
+    return 1
+  let report ← LeanBench.compare (names.map Lean.Name.mkSimple)
+  IO.println (Format.fmtComparison report)
+  return 0
+
 /-! ## Subcommand handler (child side) -/
 
 def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
@@ -80,6 +90,14 @@ def childSub : Cmd := `[Cli|
     "target-nanos" : Nat;  "Inner-tuning target wall-time (ns)."
 ]
 
+def compareSub : Cmd := `[Cli|
+  compare VIA runCompareCmd; ["0.1.0"]
+  "Compare multiple registered benchmarks side-by-side."
+
+  ARGS:
+    ...names : String;     "Two or more benchmark names (variadic)."
+]
+
 /-- Top-level dispatcher; the user calls this as their `main`. -/
 def topCmd : Cmd := `[Cli|
   bench NOOP; ["0.1.0"]
@@ -88,6 +106,7 @@ def topCmd : Cmd := `[Cli|
   SUBCOMMANDS:
     listSub;
     runSub;
+    compareSub;
     childSub
 ]
 

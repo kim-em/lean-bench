@@ -23,9 +23,9 @@ srcDir = "examples/Fib"
 root = "FibMain"
 
 [[lean_lib]]
-name = "Sort"
+name = "Sorts"
 srcDir = "examples/Sort"
-roots = ["Sort"]
+roots = ["Sorts"]
 
 [[lean_exe]]
 name = "sort"
@@ -42,4 +42,9 @@ root = "BinarySearchMain"
 [[lean_lib]]
 name = "LeanBenchTest"
 srcDir = "test"
-roots = ["SetupErrors", "Roundtrip"]
+roots = ["SetupErrors"]
+
+[[lean_exe]]
+name = "test-roundtrip"
+srcDir = "test"
+root = "Roundtrip"

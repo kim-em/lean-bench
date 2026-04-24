@@ -93,8 +93,6 @@ def elabSetupBenchmark : CommandElab := fun stx => do
       else candidate  -- let `expectNatToAlpha` produce the helpful error
     let resTy ← expectNatToAlpha env fnName
     let isHashable ← hasHashable resTy
-    let resTy ← expectNatToAlpha env fnName
-    let isHashable ← hasHashable resTy
     -- Names of the auto-generated helpers.
     let cName := fnName.str "_leanBench_complexity"
     let rName := fnName.str "_leanBench_runChecked"
