@@ -1,0 +1,115 @@
+import Lean
+import LeanBench.Core
+import LeanBench.Env
+
+/-!
+# `LeanBench.Child` — child-mode runner
+
+The child is invoked by the parent as:
+
+    ./bench _child --bench NAME --param N --target-nanos T
+
+It looks `NAME` up in the runtime registry, runs the function with
+auto-tuned inner repeats until total wall ≥ `T / 2`, prints one JSONL
+row to stdout, and exits 0. If anything goes wrong it prints an error
+JSONL row and exits non-zero.
+
+**Critical:** the timing AND the auto-tuned-repeat loop both happen
+on this side of the subprocess. The parent never measures wall time
+itself.
+-/
+
+open Lean
+
+namespace LeanBench
+
+/-- Auto-tuning loop: run the function once, then keep doubling the
+inner repeat count until total wall time ≥ `targetNanos / 2`.
+
+Returns `(innerRepeats, totalNanos, lastResultHash)`. -/
+partial def autoTune
+    (runner : Nat → IO (Option UInt64))
+    (param : Nat)
+    (targetNanos : Nat) :
+    IO (Nat × Nat × Option UInt64) := do
+  let halfTarget := targetNanos / 2
+  let rec runN (n : Nat) : IO (Nat × Option UInt64) := do
+    let t₀ ← IO.monoNanosNow
+    let mut hash : Option UInt64 := none
+    for _ in [0:n] do
+      hash := ← runner param
+    let t₁ ← IO.monoNanosNow
+    return (t₁ - t₀, hash)
+  let mut count := 1
+  let mut total : Nat := 0
+  let mut hash : Option UInt64 := none
+  let (t, h) ← runN count
+  total := t
+  hash := h
+  while total < halfTarget do
+    count := count * 2
+    let (t', h') ← runN count
+    total := t'
+    hash := h'
+  return (count, total, hash)
+
+/-- JSON-escape a string. Minimal — handles the few characters that
+matter for the fields we emit. -/
+private def jsonEscape (s : String) : String :=
+  s.foldl (init := "") fun acc c =>
+    match c with
+    | '"' => acc ++ "\\\""
+    | '\\' => acc ++ "\\\\"
+    | '\n' => acc ++ "\\n"
+    | '\r' => acc ++ "\\r"
+    | '\t' => acc ++ "\\t"
+    | c => acc.push c
+
+/-- Render a string field. -/
+private def jsonStr (s : String) : String := s!"\"{jsonEscape s}\""
+
+/-- Render an `Option String` field (`null` when none). -/
+private def jsonOptStr : Option String → String
+  | none => "null"
+  | some s => jsonStr s
+
+/-- Render an `Option UInt64` field as a hex literal string or `null`. -/
+private def jsonOptHash : Option UInt64 → String
+  | none => "null"
+  | some h => s!"\"0x{String.ofList (Nat.toDigits 16 h.toNat)}\""
+
+/-- Render one JSONL row to stdout. -/
+def emitRow
+    (function : Lean.Name) (param innerRepeats totalNanos : Nat)
+    (resultHash : Option UInt64) (status : Status)
+    (errorMsg? : Option String := none) :
+    IO Unit := do
+  let perCall : Float := totalNanos.toFloat / innerRepeats.toFloat
+  let row :=
+    "{" ++ String.intercalate "," [
+      "\"schema_version\":1",
+      s!"\"function\":{jsonStr function.toString}",
+      s!"\"param\":{param}",
+      s!"\"inner_repeats\":{innerRepeats}",
+      s!"\"total_nanos\":{totalNanos}",
+      s!"\"per_call_nanos\":{perCall}",
+      s!"\"result_hash\":{jsonOptHash resultHash}",
+      s!"\"status\":{jsonStr status.toJsonString}",
+      s!"\"error\":{jsonOptStr errorMsg?}"
+    ] ++ "}"
+  IO.println row
+
+/-- Top-level child entry point. -/
+def runChildMode (benchName : Lean.Name) (param targetNanos : Nat) : IO UInt32 := do
+  match ← findRuntimeEntry benchName with
+  | none =>
+    emitRow benchName param 0 0 none
+      (.error s!"unregistered benchmark: {benchName}")
+      (some s!"unregistered benchmark: {benchName}")
+    return 1
+  | some entry =>
+    let (count, total, hash) ← autoTune entry.runner param targetNanos
+    emitRow benchName param count total hash .ok
+    return 0
+
+end LeanBench

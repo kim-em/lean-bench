@@ -20,7 +20,7 @@ roots = ["Fib"]
 [[lean_exe]]
 name = "fib"
 srcDir = "examples/Fib"
-root = "Main"
+root = "FibMain"
 
 [[lean_lib]]
 name = "Sort"
@@ -30,12 +30,12 @@ roots = ["Sort"]
 [[lean_exe]]
 name = "sort"
 srcDir = "examples/Sort"
-root = "Main"
+root = "SortMain"
 
 [[lean_exe]]
 name = "binarysearch"
 srcDir = "examples/BinarySearch"
-root = "Main"
+root = "BinarySearchMain"
 
 # --- tests ---
 
