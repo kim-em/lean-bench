@@ -5,6 +5,55 @@ expected complexity, run it, and get back ratios `C = observed / expected`
 that should be roughly constant if the implementation matches the
 declared complexity.
 
+## Try it
+
+Clone, build, run a shipped example. No code to write:
+
+```bash
+$ git clone https://github.com/kim-em/lean-bench.git
+$ cd lean-bench
+$ lake build fib_benchmark_example
+$ ./.lake/build/bin/fib_benchmark_example list
+registered benchmarks:
+  «LeanBench.Examples.Fib.goodFib»  →  complexity = «LeanBench.Examples.Fib.goodFib._leanBench_complexity»
+  «LeanBench.Examples.Fib.badFib»   →  complexity = «LeanBench.Examples.Fib.badFib._leanBench_complexity»
+
+$ ./.lake/build/bin/fib_benchmark_example run LeanBench.Examples.Fib.goodFib
+…
+       2 20.000000 ns ×16777216  C=5.142
+       4 19.000000 ns ×16777216  C=1.248
+       8 22.000000 ns ×16777216  C=0.344
+      16 26.000000 ns ×16777216  C=0.103
+       …
+  524288  0.000000 ns       ×0  C=— [killed at cap]
+  verdict: inconclusive (cMin=0.003, cMax=5.142)
+  per-spawn floor (harness self-measurement): 24.7 ms
+```
+
+The verdict is `inconclusive` because the declared complexity `n*n`
+isn't a great fit at small `n` — the raw ratios trace the boundary
+where the bignum result outgrows one machine word.
+
+`compare` is the same shape, side-by-side:
+
+```bash
+$ ./.lake/build/bin/fib_benchmark_example compare \
+    LeanBench.Examples.Fib.goodFib LeanBench.Examples.Fib.badFib
+…
+common params (apples-to-apples): 0, 1, 2, 4, 8
+agreement: all functions agree on common params
+```
+
+Two more examples, same shape:
+
+```bash
+$ lake build sort_benchmark_example binary_search_benchmark_example
+$ ./.lake/build/bin/sort_benchmark_example list
+$ ./.lake/build/bin/binary_search_benchmark_example list
+```
+
+## Use it in your project
+
 ```lean
 import LeanBench
 
@@ -13,28 +62,27 @@ def goodFib (n : Nat) : Nat :=
     if k = 0 then a else go (k - 1) b (a + b)
   go n 0 1
 
--- Lean's Nat is bignum, so each step's addition costs O(n) bit ops;
--- total is O(n²). See examples/Fib/Fib.lean for why the model isn't
--- just `n`.
 setup_benchmark goodFib n => n * n
+
+def main (args : List String) : IO UInt32 :=
+  LeanBench.Cli.dispatch args
 ```
 
-```bash
-$ lake exe fib run goodFib
-goodFib   complexity=goodFib._leanBench_complexity
-  param   per-call    repeats  C
-       2 20.000000 ns ×16777216  C=5.142
-       4 19.000000 ns ×16777216  C=1.248
-       8 22.000000 ns ×16777216  C=0.344
-      16 26.000000 ns ×16777216  C=0.103
-      …
-  verdict: inconclusive (cMin=0.003, cMax=5.142)
+Add this to your project's `lakefile.toml`:
+
+```toml
+[[require]]
+name = "lean-bench"
+git = "https://github.com/kim-em/lean-bench.git"
+rev = "main"
+
+[[lean_exe]]
+name = "my_benchmarks"
+root = "MyBenchmarks"
 ```
 
-The verdict is `inconclusive` here because `n * n` is too pessimistic
-at small n (where the bignum is still one word and arithmetic is
-constant-time). The raw ratios trace the boundary clearly. See
-[doc/quickstart.md](doc/quickstart.md) for how to read them.
+then `lake exe my_benchmarks list / run NAME / compare A B …`. The
+[doc/quickstart.md](doc/quickstart.md) walks through more.
 
 ## Status
 
@@ -62,15 +110,12 @@ rationale, including limits and known caveats.
 
 ## Caveats
 
-- **Process-spawn floor.** Each measurement spawns a child process.
-  Module init for projects with heavy FFI or many imports can push
-  the per-spawn floor into the tens of milliseconds. Total batch
-  durations smaller than ~10× the empirical startup cost are noise,
-  not algorithm data. Every result file's metadata records the
-  measured per-spawn floor so you can sanity-check.
-- **Verdict is heuristic.** `consistentWithDeclaredComplexity` is a
-  weak label based on `cMax/cMin ≤ 4` over ≥3 data points past
-  param=2. The raw ratios are the source of truth.
-- **Cross-platform support is not yet verified.** Only Linux is
-  tested. macOS/WSL likely work if `timeout(1)` is available.
-  Native Windows is not currently supported (see Status above).
+Each measurement is a child process, so very fast operations have a
+per-spawn noise floor in the milliseconds. The harness measures this
+floor itself and prints it with every report.
+
+The verdict is a thresholded ratio (`cMax/cMin ≤ 4`), not a
+statistical test. Read the raw ratios.
+
+Linux is tested. macOS/WSL probably work; Windows doesn't (see
+Status).

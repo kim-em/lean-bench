@@ -11,40 +11,42 @@ rev = "main"
 name = "LeanBench"
 
 # --- examples ---
+# Lib and exe names are deliberately verbose so they don't collide
+# with what a downstream user might want to call their own targets.
 
 [[lean_lib]]
-name = "Fib"
+name = "LeanBenchExampleFib"
 srcDir = "examples/Fib"
-roots = ["Fib"]
+roots = ["LeanBenchExampleFib"]
 
 [[lean_exe]]
-name = "fib"
+name = "fib_benchmark_example"
 srcDir = "examples/Fib"
-root = "FibMain"
+root = "LeanBenchExampleFibMain"
 
 [[lean_lib]]
-name = "Sorts"
+name = "LeanBenchExampleSort"
 srcDir = "examples/Sort"
-roots = ["Sorts"]
+roots = ["LeanBenchExampleSort"]
 
 [[lean_exe]]
-name = "sort"
+name = "sort_benchmark_example"
 srcDir = "examples/Sort"
-root = "SortMain"
+root = "LeanBenchExampleSortMain"
 
 [[lean_exe]]
-name = "binarysearch"
+name = "binary_search_benchmark_example"
 srcDir = "examples/BinarySearch"
-root = "BinarySearchMain"
+root = "LeanBenchExampleBinarySearchMain"
 
 # --- tests ---
 
 [[lean_lib]]
 name = "LeanBenchTest"
 srcDir = "test"
-roots = ["SetupErrors"]
+roots = ["LeanBenchTestSetupErrors"]
 
 [[lean_exe]]
-name = "test-roundtrip"
+name = "roundtrip_benchmark_test"
 srcDir = "test"
-root = "Roundtrip"
+root = "LeanBenchTestRoundtrip"

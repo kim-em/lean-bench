@@ -34,7 +34,7 @@ to the observed ratios and reports best fit. Useful when the user
 doesn't want to commit to a model up front; complements the existing
 "declare and verify" workflow.
 
-Acceptance: `lake exe fib run goodFib --auto-fit` reports
+Acceptance: `lake exe fib_benchmark_example run goodFib --auto-fit` reports
 `best fit: n` for the linearised goodFib.
 
 ## F3. Memory metrics
@@ -100,7 +100,7 @@ in a project that has imported lean-bench.
 expects, so existing tooling (plotting, regression-analysis scripts)
 can ingest results.
 
-Acceptance: `lake exe fib run goodFib --export-hyperfine out.json`
+Acceptance: `lake exe fib_benchmark_example run goodFib --export-hyperfine out.json`
 produces a file `hyperfine --export-json` could have produced.
 
 ---
