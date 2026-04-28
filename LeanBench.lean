@@ -5,6 +5,7 @@ import LeanBench.Child
 import LeanBench.Run
 import LeanBench.Stats
 import LeanBench.Compare
+import LeanBench.Verify
 import LeanBench.Format
 import LeanBench.Cli
 

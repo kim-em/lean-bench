@@ -5,7 +5,7 @@ defaultTargets = [
   "LeanBenchExampleFib", "fib_benchmark_example",
   "LeanBenchExampleSort", "sort_benchmark_example",
   "binary_search_benchmark_example",
-  "LeanBenchTest", "roundtrip_benchmark_test",
+  "LeanBenchTest", "roundtrip_benchmark_test", "verify_benchmark_test",
 ]
 
 [[require]]
@@ -56,3 +56,8 @@ roots = ["LeanBenchTestSetupErrors"]
 name = "roundtrip_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestRoundtrip"
+
+[[lean_exe]]
+name = "verify_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestVerify"

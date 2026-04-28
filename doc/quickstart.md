@@ -51,7 +51,19 @@ $ lake exe bench run myFib
 ... result table ...
 $ lake exe bench compare myFib someOtherFib
 ... comparison report ...
+$ lake exe bench verify
+verifying 1 benchmark(s)...
+  [ok ] «myFib»
+all 1 benchmark(s) passed
 ```
+
+`verify` spawns the child path against `f 0` and `f 1` for each
+registered benchmark (or just the named ones). Use it as a fast
+smoke test that a registration is wired up correctly: child dispatch
+works, the row is parseable, and (when the return type is `Hashable`)
+the hashing path produces a hash. Each check is bounded by the
+benchmark's `maxSecondsPerCall`. Exit code is non-zero if any check
+fails.
 
 ## Optional: per-param setup with `with prep := …`
 

@@ -67,8 +67,8 @@ name = "my_benchmarks"
 root = "MyBenchmarks"
 ```
 
-Then `lake exe my_benchmarks list / run NAME / compare A B …`. See
-[doc/quickstart.md](doc/quickstart.md).
+Then `lake exe my_benchmarks list / run NAME / compare A B / verify …`.
+See [doc/quickstart.md](doc/quickstart.md).
 
 ## Status
 
