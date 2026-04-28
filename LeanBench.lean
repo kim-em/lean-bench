@@ -1,4 +1,5 @@
 import LeanBench.Core
+import LeanBench.Schema
 import LeanBench.Env
 import LeanBench.Setup
 import LeanBench.Child

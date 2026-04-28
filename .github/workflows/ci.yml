@@ -61,6 +61,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/cli_errors_benchmark_test
 
+      - name: schema-stability test (issue #14: required keys + version policy)
+        shell: bash
+        run: ./.lake/build/bin/schema_benchmark_test
+
       - name: end-to-end run/compare test
         shell: bash
         run: ./.lake/build/bin/e2e_benchmark_test

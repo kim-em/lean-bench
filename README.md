@@ -110,8 +110,9 @@ for the full guide.
 
 v0.1. Cross-platform: works on every platform Lean's process API
 supports (Linux, macOS, Windows). See [PLAN.md](PLAN.md) for the
-v0.2+ roadmap and [doc/quickstart.md](doc/quickstart.md) for the
-user guide.
+v0.2+ roadmap, [doc/quickstart.md](doc/quickstart.md) for the
+user guide, and [doc/schema.md](doc/schema.md) for the JSONL
+result-row schema and its evolution rules.
 
 ## Design
 

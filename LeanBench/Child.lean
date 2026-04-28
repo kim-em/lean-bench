@@ -1,6 +1,7 @@
 import Lean
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.Schema
 
 /-!
 # `LeanBench.Child` — child-mode runner
@@ -116,7 +117,8 @@ def emitRow
   let perCall : Float := totalNanos.toFloat / innerRepeats.toFloat
   let row :=
     "{" ++ String.intercalate "," [
-      "\"schema_version\":1",
+      s!"\"schema_version\":{Schema.schemaVersion}",
+      s!"\"kind\":{jsonStr Schema.kindParametric}",
       s!"\"function\":{jsonStr function.toString}",
       s!"\"param\":{param}",
       s!"\"inner_repeats\":{innerRepeats}",
@@ -171,8 +173,8 @@ def emitFixedRow
     IO Unit := do
   let row :=
     "{" ++ String.intercalate "," [
-      "\"schema_version\":1",
-      "\"kind\":\"fixed\"",
+      s!"\"schema_version\":{Schema.schemaVersion}",
+      s!"\"kind\":{jsonStr Schema.kindFixed}",
       s!"\"function\":{jsonStr function.toString}",
       s!"\"repeat_index\":{repeatIndex}",
       s!"\"total_nanos\":{totalNanos}",
