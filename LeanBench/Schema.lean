@@ -62,7 +62,22 @@ def optionalCommonKeys : Array String :=
 
 /-- Optional keys emitted only on parametric rows today. -/
 def optionalParametricKeys : Array String :=
-  #["per_call_nanos"]
+  #["per_call_nanos", "cache_mode"]
+
+/-! ## Cache-mode strings
+
+Mirrors `CacheMode.toJsonString`. Pinned here so the schema-stability
+test can assert the wire-format strings without depending on the
+enum's `toJsonString` implementation. -/
+
+def cacheModeWarm : String := "warm"
+def cacheModeCold : String := "cold"
+
+/-- Every documented cache-mode string. Readers MUST accept any of
+    these as `CacheMode` values; producers MUST emit one of these
+    on parametric rows that carry `cache_mode`. -/
+def cacheModeStrings : Array String :=
+  #[cacheModeWarm, cacheModeCold]
 
 /-! ## Version handling
 

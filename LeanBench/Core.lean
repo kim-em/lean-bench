@@ -85,6 +85,39 @@ inductive ParamSchedule
   | auto
   deriving Inhabited, Repr, BEq
 
+/-- Cache-state policy for a parametric benchmark.
+
+`.warm` (the default) is the current behaviour: the child auto-tunes
+an inner-repeat count, runs the function many times in a single
+spawn, and reports per-call time over a steady-state batch. CPU
+caches, branch predictors, JIT-style code paths in the runtime, and
+the GC's live set are all primed across the repeats — what's
+measured is the asymptotic cost of the algorithm under hot
+microarchitectural state.
+
+`.cold` respawns the child for every ladder rung and runs the
+function exactly once per spawn, so the harness no longer
+intentionally preserves intra-child state across measurements.
+What's measured includes cache refill, branch-predictor warmup,
+allocator first-touch, and any per-call overhead the warm path
+amortises away. Note that "cold" here means "no harness-side
+warmup," not "guaranteed cold hardware" — the OS / CPU may still
+carry parts of the working set across spawns; see
+`doc/advanced.md#cache-modes`.
+
+Neither mode is "more correct" — they measure different things. Read
+the docs in `doc/advanced.md#cache-modes` for when each is
+appropriate. The wire format records the mode used on every
+parametric JSONL row so post-hoc analysis can keep them apart. -/
+inductive CacheMode
+  | warm
+  | cold
+  deriving Inhabited, Repr, BEq
+
+def CacheMode.toJsonString : CacheMode → String
+  | .warm => "warm"
+  | .cold => "cold"
+
 /-- Per-benchmark configuration. Defaults are the v0.1 contract.
 
 Override defaults in two ways:
@@ -143,6 +176,12 @@ structure BenchmarkConfig where
       the declared complexity at runtime and picks `.doubling` for
       polynomial growth, `.linear` for exponential. -/
   paramSchedule : ParamSchedule := .auto
+  /-- Cache-state policy — see `CacheMode`. `.warm` (default) is the
+      current inner-repeat-in-child design; `.cold` respawns for every
+      rung and runs the function exactly once per spawn so cache state
+      is not preserved across measurements. The two modes measure
+      different things; see `doc/advanced.md#cache-modes`. -/
+  cacheMode : CacheMode := .warm
   deriving Inhabited, Repr, BEq
 
 /-- Optional run-time overrides applied on top of a benchmark's
@@ -176,6 +215,9 @@ structure ConfigOverride where
       switches the shape (e.g. declared `.doubling`, CLI `.linear`),
       the macro-default sample count is used. -/
   paramSchedule?         : Option ParamSchedule := none
+  /-- Override the cache-state policy. CLI exposes this as
+      `--cache-mode warm|cold`. -/
+  cacheMode?             : Option CacheMode := none
   deriving Inhabited, Repr
 
 /-- Merge a CLI `paramSchedule` override on top of a declared
@@ -207,7 +249,8 @@ def ConfigOverride.apply (o : ConfigOverride) (c : BenchmarkConfig) :
     verdictWarmupFraction := o.verdictWarmupFraction?.getD c.verdictWarmupFraction
     slopeTolerance        := o.slopeTolerance?.getD        c.slopeTolerance
     killGraceMs           := o.killGraceMs?.getD           c.killGraceMs
-    paramSchedule         := mergeParamSchedule o.paramSchedule? c.paramSchedule }
+    paramSchedule         := mergeParamSchedule o.paramSchedule? c.paramSchedule
+    cacheMode             := o.cacheMode?.getD             c.cacheMode }
 
 /-- Validate a `BenchmarkConfig`. The macro accepts arbitrary user
 expressions and the CLI accepts arbitrary JSON-style numbers, so

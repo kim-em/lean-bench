@@ -274,13 +274,17 @@ What this means in practice:
   but for very fast operations on small `param` you can see flat or
   non-monotone per-call times until `param` grows past where startup
   dominates.
-- **A single child process means no warm cache between params.**
-  Each measurement is a fresh subprocess, by design (so the wall
-  cap is enforceable without external `timeout(1)`). The flip side
-  is no L1/L2 carry-over, no JIT-style steady state. If your
-  algorithm's real-world performance depends on staying warm, the
-  benchmark numbers are a lower bound on cold throughput, not a
-  prediction of hot throughput.
+- **A single child process per param means no warm cache *between*
+  params.** Each measurement is a fresh subprocess, by design (so
+  the wall cap is enforceable without external `timeout(1)`). The
+  flip side is no L1/L2 carry-over, no JIT-style steady state across
+  rungs. The default `warm` mode does still amortise within a rung —
+  the auto-tuner runs the function many times inside a single
+  spawn, so caches and branch predictors reach steady state for that
+  param. If you want the cold per-call cost (cache refill on every
+  measurement, no internal averaging), use `--cache-mode cold` and
+  read [advanced.md#cache-modes](advanced.md#cache-modes). The two
+  modes measure different things; either can be appropriate.
 
 For exponential-complexity benchmarks, the ladder shifts from
 doubling to a linear sweep over `(lastOk, firstFail)` and the

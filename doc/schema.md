@@ -107,6 +107,7 @@ it explicitly; producing a row without `kind` is a writer bug.
 | key                | type             | meaning |
 |--------------------|------------------|---------|
 | `per_call_nanos`   | number           | `total_nanos / inner_repeats` precomputed. Derived; readers MAY recompute it from `total_nanos` and `inner_repeats` when absent. |
+| `cache_mode`       | string           | `"warm"` (auto-tuned inner repeats inside one child, the v0.1 default) or `"cold"` (single untuned invocation; the parent respawns the child for every ladder rung). Absence is tolerated for back-compat with rows produced before issue #12 and treated as `"warm"`. See [`advanced.md#cache-modes`](advanced.md#cache-modes). |
 
 ### Reserved-for-future-use fields
 

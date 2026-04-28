@@ -147,11 +147,16 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   let target := spec.config.targetInnerNanos
   let deadlineMs : UInt32 :=
     (spec.config.maxSecondsPerCall * 1000.0 + spec.config.killGraceMs.toFloat).toUInt32
+  -- The cache-mode flag is passed positionally (`--cache-mode warm` /
+  -- `cold`) so the child knows which timing strategy to use. The
+  -- existing `--target-nanos` is unused in cold mode but still passed
+  -- for parser symmetry.
   let args : Array String := #[
     "_child",
     "--bench", spec.name.toString (escape := false),
     "--param", toString param,
-    "--target-nanos", toString target
+    "--target-nanos", toString target,
+    "--cache-mode", spec.config.cacheMode.toJsonString
   ]
   let child ← IO.Process.spawn {
     cmd := exe
@@ -328,13 +333,26 @@ private def resolveSchedule (cfg : BenchmarkConfig) (complexity : Nat → Nat) :
 
 /-- Measure the per-spawn floor: spawn the child against the first
     available benchmark with a 1µs target. The result is dominated by
-    spawn cost when the inner work is trivial. -/
+    spawn cost when the inner work is trivial.
+
+    The probe forces `cacheMode := .warm` and `targetInnerNanos :=
+    1_000` regardless of how the first registered benchmark was
+    declared. The point of this number is to characterise the
+    harness's own startup cost — it should not vary depending on
+    whether the user happened to register a cold-mode benchmark
+    first. With warm + tiny target the autotuner converges in a
+    single iteration and the wallclock is dominated by spawn /
+    process-init / IPC, which is exactly what we want to report. -/
 def measureSpawnFloor : IO (Option Nat) := do
   let entries ← allRuntimeEntries
   if entries.isEmpty then return none
   let entry := entries[0]!
+  let probeCfg : BenchmarkConfig :=
+    { entry.spec.config with
+        targetInnerNanos := 1_000
+        cacheMode := .warm }
   let t₀ ← IO.monoNanosNow
-  let _ ← runOneBatch { entry.spec with config := { entry.spec.config with targetInnerNanos := 1_000 } } 0
+  let _ ← runOneBatch { entry.spec with config := probeCfg } 0
   let t₁ ← IO.monoNanosNow
   return some (t₁ - t₀)
 

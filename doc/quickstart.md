@@ -156,6 +156,7 @@ Available flags:
 | `--warmup-fraction`      | Float          | `verdictWarmupFraction`   |
 | `--slope-tolerance`      | Float          | `slopeTolerance`          |
 | `--param-schedule`       | ParamSchedule  | `paramSchedule`           |
+| `--cache-mode`           | CacheMode      | `cacheMode`               |
 
 `--param-schedule` accepts `auto` (default — pick from declared
 complexity), `doubling`, or `linear`. Use `--param-schedule linear`
@@ -168,6 +169,17 @@ the sample count: `--param-schedule linear` on a benchmark already
 declared with `.linear 32` keeps the declared `32`, since the flag
 only carries the schedule kind. Switching from `.auto` / `.doubling`
 to `.linear` via the CLI uses the macro-default 16 samples.
+
+`--cache-mode warm|cold` selects what is being measured. The default
+`warm` is the v0.1 design: the child auto-tunes an inner-repeat count
+and runs the function many times in a single spawn, so caches and
+branch predictors are primed across the repeats. `cold` respawns the
+child for every ladder rung and runs the function exactly once per
+spawn, so cache state is not preserved across measurements. Neither
+mode is universally better — they measure different things; see
+[advanced.md#cache-modes](advanced.md#cache-modes) for when to use
+each. Pin a benchmark in cold mode at declaration time via
+`where { cacheMode := .cold }`.
 
 `--warmup-fraction F` drops the leading `F` × ratios.size data points
 from the verdict reduction (the cold regime where per-call overhead
