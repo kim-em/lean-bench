@@ -8,6 +8,7 @@ import LeanBench.Stats
 import LeanBench.Compare
 import LeanBench.Verify
 import LeanBench.Format
+import LeanBench.Suite
 import LeanBench.Cli
 
 /-!

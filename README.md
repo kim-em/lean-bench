@@ -89,6 +89,22 @@ root = "MyBenchmarks"
 Then `lake exe my_benchmarks list / run NAME / compare A B / verify …`.
 See [doc/quickstart.md](doc/quickstart.md).
 
+## CI-budgeted suite mode
+
+For CI you usually want "run as much as fits in N seconds, tell me
+what was skipped." The `suite` subcommand:
+
+```bash
+$ lake exe my_benchmarks suite --total-seconds 300 --export results.jsonl
+```
+
+Walks the registered catalogue inside a fixed wall-clock budget,
+records skipped benchmarks explicitly (in both terminal output and
+the JSONL export), and stops within a predictable bound. Skip rows
+carry `"budget_status":"skipped"`; completed rows carry
+`"budget_status":"completed"`. See
+[doc/quickstart.md#ci-budgeted-suite-mode](doc/quickstart.md#ci-budgeted-suite-mode).
+
 ## Fixed-problem benchmarks
 
 For workloads with a single canonical input — "this hard problem

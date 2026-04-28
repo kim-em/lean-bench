@@ -64,6 +64,20 @@ def optionalCommonKeys : Array String :=
 def optionalParametricKeys : Array String :=
   #["per_call_nanos", "cache_mode"]
 
+/-! ## Suite-only optional keys (issue #9)
+
+Emitted only on rows produced by `lean-bench suite --total-seconds`'s
+JSONL exporter — never by the per-benchmark child path. They live in
+their own bucket so the schema-stability test for child emit (which
+pins the exact key set on a child row) doesn't have to know about
+them. The unified suite-row test uses
+`requiredCommonKeys ++ requiredParametricKeys ++ optionalCommonKeys
+++ optionalParametricKeys ++ optionalSuiteKeys` for parametric, and
+the analogous combination for fixed. -/
+
+def optionalSuiteKeys : Array String :=
+  #["budget_status"]
+
 /-! ## Cache-mode strings
 
 Mirrors `CacheMode.toJsonString`. Pinned here so the schema-stability
@@ -153,6 +167,21 @@ def statusError       : String := "error"
     row. -/
 def statusStrings : Array String :=
   #[statusOk, statusTimedOut, statusKilledAtCap, statusError]
+
+/-! ## Budget-status string contract (issue #9)
+
+Pinned canonical strings for the `budget_status` field on suite-export
+rows. Mirrors `BudgetStatus.toJsonString`. -/
+
+def budgetStatusCompleted : String := "completed"
+def budgetStatusSkipped   : String := "skipped"
+
+/-- Every documented `budget_status` string. Producers MUST emit one
+    of these on every row written by the suite-export path; readers
+    MUST tolerate the field's absence (rows produced outside the
+    suite path do not carry it) and reject unknown values. -/
+def budgetStatusStrings : Array String :=
+  #[budgetStatusCompleted, budgetStatusSkipped]
 
 end Schema
 end LeanBench

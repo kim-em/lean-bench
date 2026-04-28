@@ -109,6 +109,28 @@ it explicitly; producing a row without `kind` is a writer bug.
 | `per_call_nanos`   | number           | `total_nanos / inner_repeats` precomputed. Derived; readers MAY recompute it from `total_nanos` and `inner_repeats` when absent. |
 | `cache_mode`       | string           | `"warm"` (auto-tuned inner repeats inside one child, the v0.1 default) or `"cold"` (single untuned invocation; the parent respawns the child for every ladder rung). Absence is tolerated for back-compat with rows produced before issue #12 and treated as `"warm"`. See [`advanced.md#cache-modes`](advanced.md#cache-modes). |
 
+### Optional fields (suite-export only)
+
+These fields are emitted only by the suite-export path
+(`lean-bench suite --total-seconds N --export FILE`); the
+per-benchmark child path does NOT emit them. Readers that
+encounter rows from the suite-export path see them; rows from a
+plain `run` / `compare` / `verify` path do not. Absence is
+equivalent to "this row was not produced by the suite-export
+path."
+
+| key             | type   | meaning |
+|-----------------|--------|---------|
+| `budget_status` | string | One of `"completed"` (the benchmark ran to its natural end inside the suite budget) or `"skipped"` (the suite walked past this benchmark because not enough budget remained to start it). Suite-export readers MAY filter on this field; downstream tooling that doesn't know about budgeted runs treats it as an unknown extra key per [Compatibility](#compatibility). See [issue #9]. |
+
+The skipped-benchmark row is the only row in the schema where the
+required numeric fields (`total_nanos`, `param`, `inner_repeats`,
+`repeat_index`) are guaranteed-zero placeholders rather than real
+measurements. The accompanying `status: "error"` and explanatory
+`error: "skipped: budget exhausted before start"` make the row
+recognisable to readers that don't understand `budget_status`. For
+readers that do, the cleaner check is `budget_status == "skipped"`.
+
 ### Reserved-for-future-use fields
 
 The following keys are reserved by the issues that prompted this
@@ -119,14 +141,12 @@ the start:
 - `alloc_bytes`, `peak_rss_kb` — memory metrics ([#6]).
 - `env` — an object carrying reproducibility metadata: Lean version,
   toolchain, platform, hostname, … ([#11]).
-- `budget_status` — additional status discriminator for budgeted-run
-  rows that were skipped or partially completed ([#9]).
 
 Producers MUST NOT emit any of these keys with semantics other than
 the ones described in their landing PRs.
 
+[issue #9]: https://github.com/kim-em/lean-bench/issues/9
 [#6]:  https://github.com/kim-em/lean-bench/issues/6
-[#9]:  https://github.com/kim-em/lean-bench/issues/9
 [#11]: https://github.com/kim-em/lean-bench/issues/11
 
 ## Compatibility
