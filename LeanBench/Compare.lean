@@ -65,11 +65,14 @@ private def computeAgreement
           diverged := diverged.push (n₀, nᵢ, p)
   if diverged.isEmpty then .allAgreed else .divergedAt diverged
 
-/-- Run a `compare` over the listed benchmarks. -/
-def compare (names : List Lean.Name) : IO ComparisonReport := do
+/-- Run a `compare` over the listed benchmarks. The same `override`
+applies to every benchmark in the comparison, so e.g.
+`--param-ceiling 1024` shortens every ladder uniformly. -/
+def compare (names : List Lean.Name) (override : ConfigOverride := {}) :
+    IO ComparisonReport := do
   let mut results : Array BenchmarkResult := #[]
   for n in names do
-    results := results.push (← runBenchmark n)
+    results := results.push (← runBenchmark n override)
   let allParams := results.map fun r => r.points.map (·.param)
   let common := intersectParams allParams
   let agree := computeAgreement results common

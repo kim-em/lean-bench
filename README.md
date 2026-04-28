@@ -53,10 +53,25 @@ def myFib (n : Nat) : UInt64 := Id.run do
   return a
 
 setup_benchmark myFib n => n + 1
+-- Or with per-benchmark overrides on `BenchmarkConfig`:
+-- setup_benchmark myFib n => n + 1 where {
+--   maxSecondsPerCall := 0.5
+--   paramCeiling := 4096
+-- }
 
 def main (args : List String) : IO UInt32 :=
   LeanBench.Cli.dispatch args
 ```
+
+CLI flags layer on top of declared defaults, so you can tighten a
+single run without recompiling:
+
+```bash
+$ lake exe my_benchmarks run myFib --max-seconds-per-call 0.25 --param-ceiling 1024
+```
+
+See [doc/quickstart.md](doc/quickstart.md#configuring-a-benchmark)
+for the full flag list.
 
 `lakefile.toml`:
 

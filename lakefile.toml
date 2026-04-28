@@ -6,7 +6,7 @@ defaultTargets = [
   "LeanBenchExampleSort", "sort_benchmark_example",
   "binary_search_benchmark_example",
   "LeanBenchTest", "roundtrip_benchmark_test", "verify_benchmark_test",
-  "kill_path_benchmark_test",
+  "kill_path_benchmark_test", "config_benchmark_test",
 ]
 
 [[require]]
@@ -67,3 +67,8 @@ root = "LeanBenchTestVerify"
 name = "kill_path_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestKillPath"
+
+[[lean_exe]]
+name = "config_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestConfig"

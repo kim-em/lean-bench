@@ -110,10 +110,25 @@ whole job stays bounded:
   run: |
     lake build bench
     timeout 60 lake exe bench list                # always passes
-    timeout 120 lake exe bench run goodFib --max-seconds-per-call 0.5
+    timeout 120 lake exe bench run goodFib \
+      --max-seconds-per-call 0.5 --param-ceiling 1024
 ```
 
-The `--max-seconds-per-call` plumbing is on v0.2 (CLI flags for
-config overrides). v0.1 you set it via `setup_benchmark … where { … }`
-when v0.2 lands; or just rebuild with smaller `BenchmarkConfig`
-defaults locally.
+The same flags work on `compare`, so you can pin a comparison run to
+a tight wallclock budget without recompiling. See
+[quickstart.md](quickstart.md#configuring-a-benchmark) for the full
+flag list and the matching declaration-time `where { … }` syntax.
+
+When a benchmark's natural ladder is far larger than CI allows, ship
+a tighter default in the source itself rather than putting flags in
+every CI job:
+
+```lean
+setup_benchmark expensive n => 2 ^ n where {
+  maxSecondsPerCall := 0.25
+  paramCeiling := 256
+}
+```
+
+CLI flags still layer on top, so the ergonomic split is "declaration
+defaults what's true forever; CLI flags what's true today."

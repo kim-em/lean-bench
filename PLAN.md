@@ -36,6 +36,11 @@ Config flag `coldCache : Bool := false`. When true, the parent
 respawns the child for every individual measurement (no inner
 repeats). When false (default), inner repeats happen as today.
 
+Plugs into the existing `BenchmarkConfig` / `ConfigOverride` plumbing
+shipped in #5: a new field with a sensible default, exposed via
+`setup_benchmark … where { coldCache := true }` and a matching
+`--cold-cache` CLI flag.
+
 Acceptance: a benchmark with non-trivial memory layout shows distinct
 per-call times in cold vs warm mode.
 

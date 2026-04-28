@@ -83,14 +83,29 @@ inductive ParamSchedule
   | doubling
   | linear (samples : Nat := 16)
   | auto
-  deriving Inhabited, Repr
+  deriving Inhabited, Repr, BEq
 
-/-- Per-benchmark configuration. Defaults are the v0.1 contract. -/
+/-- Per-benchmark configuration. Defaults are the v0.1 contract.
+
+Override defaults in two ways:
+
+- At declaration time via `setup_benchmark name n => model where { … }`
+  — see `LeanBench.Setup`.
+- At run time via CLI flags on `run` / `compare` (e.g.
+  `--max-seconds-per-call 0.25 --param-ceiling 1024`) — see
+  `LeanBench.Cli`.
+
+The structure deliberately keeps every field optional (default-valued) so
+both paths use the same builder syntax and new fields can be added
+without breaking existing benchmarks. Future measurement-mode flags
+(see #12) plug in as additional fields here. -/
 structure BenchmarkConfig where
   /-- Target wall time per inner-tuned batch (ns). Default 500ms. -/
   targetInnerNanos  : Nat   := 500_000_000
-  /-- Hard wallclock cap for any single batch (s). Parent kills child past this. -/
-  maxSecondsPerCall : Nat   := 1
+  /-- Hard wallclock cap for any single batch (s). Parent kills child
+      past this. `Float` so users can pass fractional values such as
+      `0.25` from CLI overrides. -/
+  maxSecondsPerCall : Float := 1.0
   /-- Max param the doubling ladder will reach before stopping. -/
   paramCeiling      : Nat   := 1_073_741_824
   /-- Min param the doubling ladder starts from. -/
@@ -128,7 +143,64 @@ structure BenchmarkConfig where
       the declared complexity at runtime and picks `.doubling` for
       polynomial growth, `.linear` for exponential. -/
   paramSchedule : ParamSchedule := .auto
+  deriving Inhabited, Repr, BEq
+
+/-- Optional run-time overrides applied on top of a benchmark's
+declared `BenchmarkConfig`. Each `none` field leaves the declared
+value untouched; each `some` replaces it.
+
+Built by the CLI from flags such as `--max-seconds-per-call 0.5
+--param-ceiling 1024 --warmup-fraction 0.3`. Kept as a separate type
+so the macro-time defaults stay independent of CLI plumbing and so
+adding a new override knob is a one-field change. The set of fields
+here is intentionally narrower than `BenchmarkConfig` — schedule and
+noise-floor knobs stay declaration-time-only via `where { ... }`. -/
+structure ConfigOverride where
+  targetInnerNanos?      : Option Nat   := none
+  maxSecondsPerCall?     : Option Float := none
+  paramCeiling?          : Option Nat   := none
+  paramFloor?            : Option Nat   := none
+  verdictWarmupFraction? : Option Float := none
+  slopeTolerance?        : Option Float := none
+  killGraceMs?           : Option Nat   := none
   deriving Inhabited, Repr
+
+/-- Apply overrides on top of a config. `none` keeps the config value. -/
+def ConfigOverride.apply (o : ConfigOverride) (c : BenchmarkConfig) :
+    BenchmarkConfig :=
+  -- `{ c with ... }` so fields not present in `ConfigOverride`
+  -- (`narrowRangeNoiseFloor`, `paramSchedule`) are preserved from the
+  -- declared config rather than reset to structure defaults.
+  { c with
+    targetInnerNanos      := o.targetInnerNanos?.getD      c.targetInnerNanos
+    maxSecondsPerCall     := o.maxSecondsPerCall?.getD     c.maxSecondsPerCall
+    paramCeiling          := o.paramCeiling?.getD          c.paramCeiling
+    paramFloor            := o.paramFloor?.getD            c.paramFloor
+    verdictWarmupFraction := o.verdictWarmupFraction?.getD c.verdictWarmupFraction
+    slopeTolerance        := o.slopeTolerance?.getD        c.slopeTolerance
+    killGraceMs           := o.killGraceMs?.getD           c.killGraceMs }
+
+/-- Validate a `BenchmarkConfig`. The macro accepts arbitrary user
+expressions and the CLI accepts arbitrary JSON-style numbers, so
+nothing rules out e.g. `maxSecondsPerCall := -1.0` or
+`paramFloor > paramCeiling` at construction time. We catch the most
+confusing combinations here and report them as a single user-facing
+error rather than letting them produce empty ladders, hung children,
+or vacuous verdicts further downstream. Returns `Except String Unit`
+so the caller decides whether to throw an `IO.Error`, attach a
+location, etc. -/
+def BenchmarkConfig.validate (c : BenchmarkConfig) : Except String Unit := do
+  unless c.maxSecondsPerCall > 0.0 do
+    .error s!"BenchmarkConfig.maxSecondsPerCall must be > 0; got {c.maxSecondsPerCall}"
+  unless c.targetInnerNanos > 0 do
+    .error s!"BenchmarkConfig.targetInnerNanos must be > 0; got {c.targetInnerNanos}"
+  unless c.slopeTolerance > 0.0 do
+    .error s!"BenchmarkConfig.slopeTolerance must be > 0; got {c.slopeTolerance}"
+  unless 0.0 ≤ c.verdictWarmupFraction ∧ c.verdictWarmupFraction < 1.0 do
+    .error s!"BenchmarkConfig.verdictWarmupFraction must be in [0, 1); got {c.verdictWarmupFraction}"
+  unless c.paramFloor ≤ c.paramCeiling do
+    .error s!"BenchmarkConfig.paramFloor must be ≤ paramCeiling; got {c.paramFloor} > {c.paramCeiling}"
+  pure ()
 
 /-- One entry in the benchmark registry. Stored as `Name`s plus a
 printable copy of the complexity formula; neither `Syntax` nor `Expr`,
@@ -144,6 +216,13 @@ structure BenchmarkSpec where
   complexityFormula : String
   /-- Auto-generated `Nat → IO (Option UInt64)` runner. -/
   runCheckedName   : Lean.Name
+  /-- Auto-generated `BenchmarkConfig` def carrying any
+      `where { ... }` overrides applied at declaration time.
+      Compile-time tooling that walks the persistent registry can
+      resolve this constant against the environment to recover the
+      declared config; the runtime registry already has it as a
+      value. -/
+  configDeclName   : Lean.Name := Lean.Name.anonymous
   /-- True iff the function's return type has a `Hashable` instance;
       hashing is enabled in `runChecked` only when this is set. -/
   hashable         : Bool

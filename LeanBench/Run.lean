@@ -98,7 +98,7 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   let exe ← ownExe
   let target := spec.config.targetInnerNanos
   let deadlineMs : UInt32 :=
-    (spec.config.maxSecondsPerCall * 1000 + spec.config.killGraceMs).toUInt32
+    (spec.config.maxSecondsPerCall * 1000.0 + spec.config.killGraceMs.toFloat).toUInt32
   let args : Array String := #[
     "_child",
     "--bench", spec.name.toString (escape := false),
@@ -304,12 +304,25 @@ def measureSpawnFloor : IO (Option Nat) := do
 
 /-- Run one benchmark end-to-end: resolve the schedule, run the
     doubling probe, optionally do a bracket-internal linear sweep,
-    then summarise. -/
-def runBenchmark (name : Lean.Name) : IO BenchmarkResult := do
+    then summarise.
+
+    The optional `override` lets callers (typically the CLI) override
+    individual `BenchmarkConfig` fields on top of whatever was declared
+    via `setup_benchmark`. The merged config is validated before any
+    subprocesses spawn, so e.g. a negative `--max-seconds-per-call`
+    or `paramFloor > paramCeiling` produces a user-facing error rather
+    than an empty ladder. -/
+def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
+    IO BenchmarkResult := do
   let some entry ← findRuntimeEntry name
     | throw (.userError s!"unregistered benchmark: {name}")
-  let schedule := resolveSchedule entry.spec.config entry.complexity
-  let (probePoints, lastOk?, firstFail?) ← runDoublingProbe entry.spec
+  let cfg := override.apply entry.spec.config
+  match cfg.validate with
+  | .error msg => throw (.userError s!"{name}: {msg}")
+  | .ok () => pure ()
+  let spec := { entry.spec with config := cfg }
+  let schedule := resolveSchedule cfg entry.complexity
+  let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
   let mut points := probePoints
   match schedule with
   | .doubling => pure ()
@@ -325,8 +338,7 @@ def runBenchmark (name : Lean.Name) : IO BenchmarkResult := do
             if dp.param == lastOk && dp.status == .ok then
               some dp.perCallNanos
             else none).getD 0.0
-      let capNanos : Float :=
-        entry.spec.config.maxSecondsPerCall.toFloat * 1.0e9
+      let capNanos : Float := cfg.maxSecondsPerCall * 1.0e9
       let effFirstFail :=
         estimateFirstFail entry.complexity lastOk lastOkPerCall
           capNanos firstFail
@@ -336,7 +348,7 @@ def runBenchmark (name : Lean.Name) : IO BenchmarkResult := do
         -- don't enter `cMin`/`cMax`/slope.
         points := points.map ({ · with partOfVerdict := false })
         for n in rungs do
-          let dp ← runOneBatch entry.spec n
+          let dp ← runOneBatch spec n
           points := points.push dp
           if dp.status != .ok then break
     | _, _ =>
@@ -345,7 +357,7 @@ def runBenchmark (name : Lean.Name) : IO BenchmarkResult := do
       -- `partOfVerdict := true`.
       pure ()
   let spawnFloor ← measureSpawnFloor
-  let summary := Stats.summarize entry.spec entry.complexity points
+  let summary := Stats.summarize spec entry.complexity points
   return { summary with spawnFloorNanos? := spawnFloor }
 
 end LeanBench
