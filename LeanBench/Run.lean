@@ -93,6 +93,33 @@ def synthRow (param : Nat) (status : Status) : DataPoint :=
   { param, innerRepeats := 0, totalNanos := 0, perCallNanos := 0.0
   , resultHash := none, status, partOfVerdict := true }
 
+/-- Pure classifier for the post-spawn outcome of a child run. Folds
+    `(exit, stdout, stderr, wasKilled)` into a `DataPoint` using exactly
+    the same rules `runOneBatch` applies inline. Extracted so the failure
+    branches (empty stdout, malformed JSONL, non-zero exit, killed-at-cap)
+    are unit-testable without spawning a real subprocess.
+
+    The `stderrText` argument is appended to synthesized error messages so
+    the user sees whatever the child wrote before dying. Pass `""` when
+    there's nothing to attach. -/
+def classifyChildOutcome
+    (param : Nat) (exit : UInt32) (stdout stderrText : String)
+    (wasKilled : Bool) : DataPoint :=
+  let withStderr (msg : String) : String :=
+    if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
+  if wasKilled then
+    synthRow param .killedAtCap
+  else match exit with
+    | 0 =>
+      let line := stdout.trimAscii.toString
+      if line.isEmpty then
+        synthRow param (.error (withStderr "child exited 0 but produced no output"))
+      else match parseChildRow line with
+        | .ok row => row
+        | .error e => synthRow param (.error (withStderr s!"parse: {e}"))
+    | other =>
+      synthRow param (.error (withStderr s!"child exited with code {other}"))
+
 /-- Spawn one child invocation and return the resulting DataPoint. -/
 def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   let exe ← ownExe
@@ -166,24 +193,12 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
     match stderrTask.get with
     | .ok s => s.trimAscii.toString
     | .error _ => ""
-  let withStderr (msg : String) : String :=
-    if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
   -- The killer writes `killedRef := true` *before* it calls `Child.kill`,
   -- so by the time `child.wait` has returned (which can only happen
   -- after the kill takes effect, in the kill case) the flag is already
   -- committed. Hence we don't have to synchronize with the killer task.
   let wasKilled ← killedRef.get
-  if wasKilled then
-    return synthRow param .killedAtCap
-  match exit with
-  | 0 =>
-    let line := stdout.trimAscii.toString
-    if line.isEmpty then
-      return synthRow param (.error (withStderr "child exited 0 but produced no output"))
-    match parseChildRow line with
-    | .ok row => return row
-    | .error e => return synthRow param (.error (withStderr s!"parse: {e}"))
-  | other => return synthRow param (.error (withStderr s!"child exited with code {other}"))
+  return classifyChildOutcome param exit stdout stderrText wasKilled
 
 /-- Doubling ladder from floor through ceiling. -/
 def paramLadder (cfg : BenchmarkConfig) : Array Nat := Id.run do
@@ -384,6 +399,29 @@ def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
 private def synthFixedRow (idx : Nat) (status : Status) : FixedDataPoint :=
   { repeatIndex := idx, totalNanos := 0, resultHash := none, status }
 
+/-- Pure classifier for the post-spawn outcome of a fixed-benchmark
+    child run. Mirrors `classifyChildOutcome` for the parametric path. -/
+def classifyFixedChildOutcome
+    (repeatIndex : Nat) (exit : UInt32) (stdout stderrText : String)
+    (wasKilled : Bool) : FixedDataPoint :=
+  let withStderr (msg : String) : String :=
+    if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
+  if wasKilled then
+    synthFixedRow repeatIndex .killedAtCap
+  else match exit with
+    | 0 =>
+      let line := stdout.trimAscii.toString
+      if line.isEmpty then
+        synthFixedRow repeatIndex
+          (.error (withStderr "child exited 0 but produced no output"))
+      else match parseFixedChildRow line with
+        | .ok row => row
+        | .error e =>
+          synthFixedRow repeatIndex (.error (withStderr s!"parse: {e}"))
+    | other =>
+      synthFixedRow repeatIndex
+        (.error (withStderr s!"child exited with code {other}"))
+
 /-- Spawn one fixed-benchmark child. `repeatIndex` is the 0-based
     index reported back in the JSONL row; `cfg` carries the kill
     cap. Same kill-on-cap machinery as `runOneBatch`. -/
@@ -436,24 +474,8 @@ def runFixedOneBatch (spec : FixedSpec) (cfg : FixedBenchmarkConfig)
     match stderrTask.get with
     | .ok s => s.trimAscii.toString
     | .error _ => ""
-  let withStderr (msg : String) : String :=
-    if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
   let wasKilled ← killedRef.get
-  if wasKilled then
-    return synthFixedRow repeatIndex .killedAtCap
-  match exit with
-  | 0 =>
-    let line := stdout.trimAscii.toString
-    if line.isEmpty then
-      return synthFixedRow repeatIndex
-        (.error (withStderr "child exited 0 but produced no output"))
-    match parseFixedChildRow line with
-    | .ok row => return row
-    | .error e =>
-      return synthFixedRow repeatIndex (.error (withStderr s!"parse: {e}"))
-  | other =>
-    return synthFixedRow repeatIndex
-      (.error (withStderr s!"child exited with code {other}"))
+  return classifyFixedChildOutcome repeatIndex exit stdout stderrText wasKilled
 
 /-- Numeric median of a sorted `Array Nat`. Returns the upper of the
     two middle elements for even sizes — i.e. the element at index
