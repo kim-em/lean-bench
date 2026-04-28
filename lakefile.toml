@@ -13,6 +13,7 @@ defaultTargets = [
   "e2e_benchmark_test", "cli_errors_benchmark_test",
   "schema_benchmark_test", "cache_mode_benchmark_test",
   "advisory_benchmark_test", "outer_trials_benchmark_test",
+  "export_benchmark_test",
 ]
 
 [[require]]
@@ -128,3 +129,8 @@ root = "LeanBenchTestAdvisory"
 name = "outer_trials_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestOuterTrials"
+
+[[lean_exe]]
+name = "export_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestExport"
