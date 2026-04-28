@@ -65,6 +65,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/schema_benchmark_test
 
+      - name: tags and filtering test (issue #10)
+        shell: bash
+        run: ./.lake/build/bin/tags_benchmark_test
+
       - name: end-to-end run/compare test
         shell: bash
         run: ./.lake/build/bin/e2e_benchmark_test
