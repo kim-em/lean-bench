@@ -18,21 +18,25 @@ Builds the library + examples and runs a linear-Fibonacci benchmark
 over params `0, 1, 2, 4, 8, …, 134_217_728`. Tail of the output:
 
 ```
-   32768 186.988 µs  ×2048  C=5.706
-   65536 388.242 µs  ×1024  C=5.924
-  131072 748.856 µs   ×512  C=5.713
-  262144   1.499 ms   ×256  C=5.718
-  524288   3.114 ms   ×128  C=5.938
- 1048576   5.993 ms    ×64  C=5.715
- …
-verdict: consistentWithDeclaredComplexity (cMin=5.408, cMax=19.981)
+       32_768  197.481 µs     ×2^9  C= 6.027
+       65_536  374.301 µs     ×2^9  C= 5.711
+      131_072  747.345 µs     ×2^8  C= 5.702
+      262_144    1.496 ms     ×2^7  C= 5.708
+      524_288    2.989 ms     ×2^6  C= 5.702
+    1_048_576    5.979 ms     ×2^6  C= 5.702
+    …
+  verdict: consistent with declared complexity (cMin=5.702, cMax=6.863, β=-0.005)
 ```
+
+Tombstones `†` on earlier rungs mark the warmup-trim region — those
+rows aren't included in the slope fit.
 
 `goodFib` is declared as `O(n)`; observed per-call time scales
 linearly across 22 doublings (n=2 through n=134M); `C` stabilises
 near 5.7 ns per iteration once the param is large enough that the
-small fixed per-call cost (loop frame, hash, the noinline black box
-that defeats dead-code elimination) amortises.
+small fixed per-call cost amortises. `β` is the log-log slope of `C`
+vs `param` over the trimmed tail — β ≈ 0 is what a correct complexity
+declaration looks like.
 
 ## Use it in your project
 
@@ -80,10 +84,10 @@ and is on the v0.2 list — see [PLAN.md](PLAN.md).
 
 ## Design
 
-Subprocess-per-batch. The CHILD does the timing and the auto-tuned
-inner-repeat loop; the PARENT only spawns, reads JSONL stdout, and
+Subprocess-per-batch. The child does the timing and the auto-tuned
+inner-repeat loop; the parent only spawns, reads JSONL stdout, and
 SIGTERMs the child if a single batch exceeds `--max-seconds-per-call`.
-Why subprocess: Lean has no portable in-process interrupt for
+We use subprocesses because Lean has no portable in-process interrupt for
 arbitrary computation, so the only reliable way to enforce a
 wallclock cap is to give each measurement its own process.
 
@@ -96,8 +100,9 @@ Each measurement is a child process, so very fast operations have a
 per-spawn noise floor in the milliseconds. The harness measures this
 floor itself and prints it with every report.
 
-The verdict is a thresholded ratio (`cMax/cMin ≤ 4`), not a
-statistical test. Read the raw ratios.
+The verdict is a thresholded log-log slope (`|β| ≤ 0.15` over the
+trimmed tail), not a statistical test. β's sign tells you direction;
+read the raw ratios for magnitude.
 
 Linux is tested. macOS/WSL probably work; Windows doesn't (see
 Status).

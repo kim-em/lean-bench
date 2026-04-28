@@ -93,12 +93,15 @@ branching leaking through the design.
   type. Compiled-code sanity checks live in `lean-bench verify` (a
   CLI subcommand, not yet implemented).
 
-- **Strong verdict labels.** `cMax/cMin ≤ 4` over ≥3 data points
-  past `param=2` triggers `consistentWithDeclaredComplexity`,
-  otherwise `inconclusive`. The raw `ratios` array is the source of
-  truth; the verdict is decoration. The labels deliberately don't
-  say "matches" or "doesn't match" because the heuristic isn't
-  defended statistically.
+- **Strong verdict labels.** The verdict fits the log-log slope β of
+  `C` vs `param` over the trimmed tail (leading 20% of ratios
+  dropped by default). `|β| ≤ 0.15` → "consistent with declared
+  complexity", otherwise "inconclusive". β's sign is reported
+  alongside the verdict so callers can see direction, but the verdict
+  itself stays binary: the raw `ratios` array is the source of truth
+  and the verdict is decoration. The labels deliberately don't say
+  "matches" or "doesn't match" because the heuristic isn't defended
+  statistically.
 
 - **Statistical machinery.** No outlier rejection, confidence
   intervals, repeated outer trials. v0.1 trusts that

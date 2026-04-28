@@ -11,9 +11,9 @@ through its own doubling ladder, then prints:
 - the full per-function table (one block per benchmark)
 - the `commonParams` intersection (the params at which every
   function produced an `ok` row)
-- `agreement` over those params: `allAgreed`, `divergedAt …`, or
-  `hashUnavailable` (when at least one function's return type lacks
-  `Hashable`)
+- `agreement` over those params: all agreed, diverged at specific
+  (function, function, param) triples, or hash unavailable (when at
+  least one function's return type lacks `Hashable`)
 
 A function whose ladder stops early (because its complexity rises
 faster) doesn't break the comparison — its rows are preserved and
@@ -28,28 +28,41 @@ the result (so the benchmark measures real work) but writes
 ## Reading the verdict
 
 The raw `ratios` array `[(param, perCallNanos / complexity(param)), …]`
-is the source of truth. The verdict is a heuristic decoration:
+is the source of truth. The verdict is a heuristic decoration.
 
-- `consistentWithDeclaredComplexity` if `cMax / cMin ≤ 4` over ≥3
-  data points past `param = 2`
-- `inconclusive` otherwise
+The decision rule is the log-log slope β of `C` vs `param` over the
+trimmed tail (the leading `verdictWarmupFraction` of ratios — 20% by
+default — is dropped first, so the cold regime can't corrupt the fit):
 
-`inconclusive` is not "the implementation is wrong" — it just means
-the model + measurement noise doesn't support the strong claim.
-Things that produce `inconclusive`:
+- "consistent with declared complexity" if `|β| ≤ slopeTolerance`
+  (0.15 by default)
+- "inconclusive" otherwise
 
-- declared complexity is wrong (e.g. `n` for an O(n²) algorithm)
+β is printed on the verdict line alongside `cMin`/`cMax`. A correct
+complexity declaration gives β ≈ 0; positive β means the function
+grows faster than declared by roughly a factor of `n^β`, negative β
+means slower. The verdict line surfaces a "looks slower/faster than
+declared by ~n^β" hint whenever `|β|` is both outside tolerance and
+at least 0.05.
+
+An inconclusive verdict is not "the implementation is wrong" — it
+just means the model + measurement noise doesn't support the strong
+claim. Things that produce an inconclusive verdict:
+
+- declared complexity is wrong (e.g. `n` for an O(n²) algorithm — β
+  comes back near 1)
 - declared complexity is too coarse (e.g. `2^n` for an algorithm
-  whose actual cost is `1.6^n` — these differ by a polynomial
-  factor that shows up over a doubling ladder)
+  whose actual cost is `φ^n` — β comes back negative; the deviation
+  is exponential, not polynomial, so the "~n^β" shorthand is a
+  rough summary rather than an exact exponent)
 - cache effects (smooth at small n, jumps at L1 / L2 boundaries)
 - arbitrary-precision arithmetic on growing results (Lean's `Nat`
   is bignum; if `f n` returns a number with k bits, every operation
   on it costs O(k))
 
-When the verdict is `inconclusive`, look at the raw ratios. They
-tell you which way C is drifting (growing → algorithm is slower
-than declared; shrinking → declared model is too pessimistic).
+β tells you the direction; the raw ratios tell you the magnitude.
+Together they're enough to tell "off by a polynomial factor" from
+"off by a constant factor but drifting" from "just noisy".
 
 ## The per-spawn floor
 

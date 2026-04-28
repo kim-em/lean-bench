@@ -44,7 +44,7 @@ def runListCmd (_ : Cli.Parsed) : IO UInt32 := do
 
 def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   let nameStr := (p.positionalArg! "name").as! String
-  let result ← LeanBench.runBenchmark (Lean.Name.mkSimple nameStr)
+  let result ← LeanBench.runBenchmark nameStr.toName
   IO.println (Format.fmtResult result)
   return 0
 
@@ -53,7 +53,7 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   if names.isEmpty then
     IO.eprintln "compare: need at least two benchmark names"
     return 1
-  let report ← LeanBench.compare (names.map Lean.Name.mkSimple)
+  let report ← LeanBench.compare (names.map String.toName)
   IO.println (Format.fmtComparison report)
   return 0
 
@@ -63,7 +63,7 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
   let benchStr := (p.flag! "bench").as! String
   let param := (p.flag! "param").as! Nat
   let targetNanos := (p.flag! "target-nanos").as! Nat
-  LeanBench.runChildMode (Lean.Name.mkSimple benchStr) param targetNanos
+  LeanBench.runChildMode benchStr.toName param targetNanos
 
 /-! ## Cmd tree definitions -/
 

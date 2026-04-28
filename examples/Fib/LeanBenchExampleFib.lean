@@ -8,9 +8,10 @@ Two implementations of Fibonacci, both benchmarked.
 - `goodFib` — linear bottom-up over `UInt64` (constant per-step).
    Declared complexity `n`.
 - `badFib`  — naive doubly-recursive over `Nat`. Declared complexity
-   `2 ^ n`. The verdict is `inconclusive` — the actual cost is
-   `Θ(φ ^ n)` (golden ratio), and `2 ^ n` overestimates by a
-   sub-exponential factor. The raw ratios show the gap.
+   `144 ^ n / 89 ^ n`: the actual cost is `Θ(φ ^ n)` (golden ratio),
+   and `144 / 89 ≈ 1.61798` is within ~3×10⁻⁵ of `φ ≈ 1.61803`, so
+   `(144/89)^n` tracks `φ^n` to well under a percent across the test
+   range — close enough that the verdict should be conclusive.
 
 Run them with `lake exe fib_benchmark_example list` /
 `run NAME` / `compare A B`.
@@ -39,6 +40,6 @@ def badFib : Nat → Nat
   | n + 2 => badFib n + badFib (n + 1)
 
 setup_benchmark goodFib n => n
-setup_benchmark badFib  n => 2 ^ n
+setup_benchmark badFib  n => 144 ^ n / 89 ^ n
 
 end LeanBench.Examples.Fib

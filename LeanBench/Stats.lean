@@ -33,18 +33,65 @@ def ratiosFromPoints
     acc := acc.push (dp.param, dp.perCallNanos / d.toFloat)
   return acc
 
-/-- Reduce the ratios into the v0.1 weak verdict. -/
-def deriveVerdict (ratios : Array Ratio) : Verdict × Option Float × Option Float :=
+/-- OLS slope of the points `(x, y)`. `none` if there are fewer than
+    two points, or if the `x` values are (essentially) all equal. -/
+private def fitSlope (pts : Array (Float × Float)) : Option Float :=
+  if pts.size < 2 then none
+  else Id.run do
+    let n := pts.size.toFloat
+    let mut sx : Float := 0.0
+    let mut sy : Float := 0.0
+    for (x, y) in pts do
+      sx := sx + x
+      sy := sy + y
+    let xbar := sx / n
+    let ybar := sy / n
+    let mut num : Float := 0.0
+    let mut den : Float := 0.0
+    for (x, y) in pts do
+      let dx := x - xbar
+      num := num + dx * (y - ybar)
+      den := den + dx * dx
+    if den < 1e-12 then return none
+    return some (num / den)
+
+/-- Reduce the ratios into the v0.1 weak verdict.
+
+    `warmupFraction ∈ [0, 1)` is the fraction of leading ratios to drop
+    before fitting, so the cold regime (where per-spawn overhead
+    dominates the declared complexity) doesn't corrupt the slope.
+    Clamped to leave at least 3 samples.
+
+    The verdict is decided by the log-log slope β of `C` vs `param`
+    over the trimmed tail: `|β| ≤ slopeTolerance` → consistent, else
+    inconclusive. `cMin`/`cMax` are still reported as diagnostic
+    context, but no longer drive the verdict. Returns
+    `(verdict, cMin?, cMax?, slope?, droppedLeading)`. -/
+def deriveVerdict (ratios : Array Ratio)
+    (warmupFraction : Float) (slopeTolerance : Float) :
+    Verdict × Option Float × Option Float × Option Float × Nat :=
   if ratios.size < 3 then
-    (.inconclusive, none, none)
+    (.inconclusive, none, none, none, 0)
   else
-    let cs := ratios.map (·.2)
+    let raw := (ratios.size.toFloat * warmupFraction).toUInt64.toNat
+    let maxDrop := ratios.size - 3
+    let dropCount := min raw maxDrop
+    let kept := ratios.extract dropCount ratios.size
+    let cs := kept.map (·.2)
     let cMin := cs.foldl min cs[0]!
     let cMax := cs.foldl max cs[0]!
-    let v : Verdict :=
-      if cMax / cMin ≤ 4.0 then .consistentWithDeclaredComplexity
-      else .inconclusive
-    (v, some cMin, some cMax)
+    let pts : Array (Float × Float) := kept.filterMap fun (p, c) =>
+      if c > 0.0 && p ≥ 1 then
+        some (Float.log p.toFloat, Float.log c)
+      else
+        none
+    let slope? := fitSlope pts
+    let v : Verdict := match slope? with
+      | some β => if β.abs ≤ slopeTolerance then
+                    .consistentWithDeclaredComplexity
+                  else .inconclusive
+      | none   => .inconclusive
+    (v, some cMin, some cMax, slope?, dropCount)
 
 /-- Build a `BenchmarkResult` from spec + complexity closure + collected points. -/
 def summarize
@@ -53,15 +100,19 @@ def summarize
     (points : Array DataPoint) :
     BenchmarkResult :=
   let ratios := ratiosFromPoints complexity points
-  let (verdict, cMin?, cMax?) := deriveVerdict ratios
+  let (verdict, cMin?, cMax?, slope?, dropped) :=
+    deriveVerdict ratios spec.config.verdictWarmupFraction
+      spec.config.slopeTolerance
   { function := spec.name
-  , complexity := spec.complexityName
+  , complexityFormula := spec.complexityFormula
   , config := spec.config
   , points
   , ratios
   , verdict
   , cMin?
-  , cMax? }
+  , cMax?
+  , verdictDroppedLeading := dropped
+  , slope? }
 
 end Stats
 end LeanBench
