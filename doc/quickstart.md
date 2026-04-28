@@ -253,6 +253,7 @@ Available flags:
 | `--param-schedule`       | ParamSchedule  | `paramSchedule`           |
 | `--cache-mode`           | CacheMode      | `cacheMode`               |
 | `--outer-trials`         | Nat            | `outerTrials`             |
+| `--auto-fit`             | (boolean flag) | (heuristic — see below)   |
 
 `--param-schedule` accepts `auto` (default — pick from declared
 complexity), `doubling`, or `linear`. Use `--param-schedule linear`
@@ -344,6 +345,94 @@ naming a concrete knob to turn next (`--max-seconds-per-call`,
 `setup_fixed_benchmark`, …). The advisory text is the actionable
 half of issue #15; the underlying classifications live on
 `BenchmarkResult.advisories` for downstream tooling.
+
+## Auto-fit
+
+`setup_benchmark` requires you to declare a complexity model. That's
+the right workflow when you know what you expect — the verdict
+catches mismatches against the declared model. But it's not the only
+useful workflow. Sometimes you have a function whose complexity is
+genuinely unclear and you'd like the tool to suggest one.
+
+Pass `--auto-fit` on `run` (or `compare`) to see this. After the
+standard verdict block, the report prints a ranked list of catalog
+models by goodness-of-fit:
+
+```
+$ lake exe bench run myFib --auto-fit
+... result table + verdict ...
+auto-fit (heuristic; not a proof — ranks the catalog by stddev of log C):
+  model                 stdLogC  mean C    n
+  n                     0.034    5.708     16  ←
+  n * Nat.log2 (n + 1)  0.612    0.412     16
+  n^2                   1.241    0.0034    16
+  ...
+```
+
+The catalog is fixed:
+
+| Catalog entry            | What it represents     |
+|--------------------------|------------------------|
+| `1`                      | constant time          |
+| `n`                      | linear                 |
+| `n * Nat.log2 (n + 1)`   | linearithmic           |
+| `n^2`                    | quadratic              |
+| `n^3`                    | cubic                  |
+| `2^n`                    | exponential            |
+
+The ranking score is `stdLogC` — the standard deviation of `log C`
+across the verdict-eligible rungs, where `C = perCallNanos / model(param)`.
+A perfect fit drives `C` to a constant (`stdLogC = 0`); the worse a
+model is, the more `C` has to vary to explain the data, and the
+higher its score. Every model is scored against the *same* rung set
+(via a log-domain evaluator that never builds `2^n` as a `Nat`), so
+the column is directly comparable across catalog entries. The table
+is sorted by score so the runner-ups make it easy to see how
+decisive the pick was.
+
+The arrow tags the best fit only when the verdict is **decisive** —
+≥ 3 usable rungs survived AND the runner-up's score is at least 1.5×
+the winner's. On a narrow ladder where adjacent catalog entries
+can't be separated, no arrow is drawn and a `‼ inconclusive: …`
+line names the reason. Widen the ladder (`--param-ceiling`,
+`--max-seconds-per-call`) to give the heuristic more room to
+discriminate.
+
+The catalog labels are exactly the strings you would write after
+`=>` in `setup_benchmark`, so adopting the suggestion is mechanical:
+
+```lean
+-- Before
+setup_benchmark myFib n => 1
+-- After (auto-fit suggested `n`)
+setup_benchmark myFib n => n
+```
+
+### Limits
+
+This is a heuristic, not a proof. Specifically:
+
+- **Catalog-bound.** Anything not in the six-entry catalog gets the
+  closest neighbour, not a faithful description. A truly `O(n^1.5)`
+  function will probably pick `n^2` or `n * Nat.log2 (n + 1)` —
+  whichever happens to dominate the dispersion at the rungs you
+  measured. Read `stdLogC` to gauge how good the closest match
+  actually is; values above ~1.0 mean even the winner doesn't fit
+  well.
+- **Range-sensitive.** Adjacent catalog entries (e.g. `n` vs
+  `n * Nat.log2 (n + 1)`) are hard to discriminate on short ladders.
+  The confidence rule above suppresses the arrow when the runner-up
+  is too close, but the ranked list itself is still printed so you
+  can see how close the call is.
+- **Independent of the verdict.** The verdict is still computed
+  against your declared complexity. Auto-fit doesn't change the
+  declared model and doesn't second-guess the verdict — it's a
+  side-channel suggestion.
+- **Log-domain evaluation.** Every catalog entry is evaluated as
+  `log M(n)` directly (`n · log 2` for `2^n`, `2 · log n` for `n²`,
+  …), so no model is silently truncated by `Float` overflow. The
+  `n` column shows the rung count each model used; when the catalog
+  is consistent (the default), every row reports the same `n`.
 
 ## What `compare` shows on divergence
 

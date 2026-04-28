@@ -77,6 +77,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/export_benchmark_test
 
+      - name: auto-fit catalog test (issue #8: heuristic model selection)
+        shell: bash
+        run: ./.lake/build/bin/auto_fit_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's
@@ -110,6 +114,29 @@ jobs:
             --param-ceiling 256 \
             --param-schedule doubling \
             --slope-tolerance 0.5
+
+      # End-to-end smoke test for issue #8: --auto-fit must execute
+      # against a real benchmark, append the heuristic block, and
+      # crown the linearly-shaped `goodFib` with `n` as best fit. The
+      # arrowed winner line is what users see; if a refactor breaks
+      # the ranking the arrow lands on the wrong row.
+      - name: fib example run with --auto-fit
+        shell: bash
+        run: |
+          out=$(./.lake/build/bin/fib_benchmark_example run \
+            LeanBench.Examples.Fib.goodFib \
+            --max-seconds-per-call 0.5 \
+            --param-ceiling 1024 \
+            --slope-tolerance 0.5 \
+            --auto-fit)
+          echo "$out"
+          echo "$out" | grep -q "auto-fit (heuristic" \
+            || { echo "missing auto-fit header"; exit 1; }
+          # The winner row carries `←` and the model label `n`. The
+          # leading whitespace + label + score columns vary, so anchor
+          # on the arrow at end of line.
+          echo "$out" | grep -E '^[[:space:]]+n[[:space:]].*←[[:space:]]*$' \
+            || { echo "expected 'n' as best fit but no arrowed n row found"; exit 1; }
 
       - name: sort example list & verify
         shell: bash

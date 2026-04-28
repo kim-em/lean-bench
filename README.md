@@ -70,6 +70,13 @@ single run without recompiling:
 $ lake exe my_benchmarks run myFib --max-seconds-per-call 0.25 --param-ceiling 1024
 ```
 
+If you don't yet know the right complexity model, declare your best
+guess (or `1`) and pass `--auto-fit` to see a ranked list of
+suggestions from a fixed catalog (`1`, `n`, `n log n`, `n²`, `n³`,
+`2ⁿ`) — the heuristic ranks each model by how constant `C =
+perCallNanos / model(n)` ends up across the ladder. See
+[doc/quickstart.md#auto-fit](doc/quickstart.md#auto-fit).
+
 See [doc/quickstart.md](doc/quickstart.md#configuring-a-benchmark)
 for the full flag list.
 

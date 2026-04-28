@@ -15,6 +15,7 @@ defaultTargets = [
   "advisory_benchmark_test", "outer_trials_benchmark_test",
   "export_benchmark_test",
   "tags_benchmark_test",
+  "auto_fit_benchmark_test",
 ]
 
 [[require]]
@@ -140,3 +141,8 @@ root = "LeanBenchTestExport"
 name = "tags_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestTags"
+
+[[lean_exe]]
+name = "auto_fit_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestAutoFit"
