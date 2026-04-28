@@ -157,6 +157,7 @@ Available flags:
 | `--slope-tolerance`      | Float          | `slopeTolerance`          |
 | `--param-schedule`       | ParamSchedule  | `paramSchedule`           |
 | `--cache-mode`           | CacheMode      | `cacheMode`               |
+| `--outer-trials`         | Nat            | `outerTrials`             |
 
 `--param-schedule` accepts `auto` (default — pick from declared
 complexity), `doubling`, or `linear`. Use `--param-schedule linear`
@@ -180,6 +181,15 @@ mode is universally better — they measure different things; see
 [advanced.md#cache-modes](advanced.md#cache-modes) for when to use
 each. Pin a benchmark in cold mode at declaration time via
 `where { cacheMode := .cold }`.
+
+`--outer-trials N` runs `N` independent measurements per ladder rung
+and reports per-param median / min / max / spread instead of a single
+sample. Default `1` matches the v0.1 behaviour. Bumping to `3` or `5`
+trades wall time for stability — useful on noisy CI hosts or when a
+verdict is borderline. The raw per-trial points stay in the result so
+nothing is lost. See [advanced.md#outer-trials](advanced.md#outer-trials)
+for how to read the summary block and what its limits are. Pin at
+declaration time via `where { outerTrials := 3 }`.
 
 For workloads that don't fit any built-in ladder — corpus inputs
 where the natural `n` values are non-uniform, or a single-rung

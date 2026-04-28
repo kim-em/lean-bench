@@ -298,12 +298,35 @@ private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
     let last := min (firstFail - 1) (lastOk + samples)
     (Array.range (last - lastOk)).map (lastOk + 1 + ·)
 
+/-- Run a single rung, taking `trials` independent outer measurements.
+    Each call to `runOneBatch` is one fresh child spawn; per-trial
+    points are tagged with `trialIndex` 0..trials-1. If the first
+    trial at this rung fails (timed out / killed / errored) we stop
+    immediately rather than re-spawning at a known-bad rung — the
+    one failed row is enough for `lastOk` / `firstFail` bracketing
+    and for the user-facing report. Issue #4. -/
+private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
+    (trials : Nat) : IO (Array DataPoint) := do
+  let mut acc : Array DataPoint := #[]
+  let trials := max 1 trials
+  for i in [0 : trials] do
+    let dp ← runOneBatch spec param
+    acc := acc.push { dp with trialIndex := i }
+    if dp.status != .ok then break
+  return acc
+
 /-- Run the static doubling ladder. Returns `(points, lastOk?, firstFail?)`:
 
 - `lastOk?` is the largest param whose status was `.ok` (none if no row
   was ok),
 - `firstFail?` is the first param after `lastOk` whose status was non-ok
   (none if the ladder ran to ceiling without failing).
+
+Each rung runs `cfg.outerTrials` independent measurements; the rung's
+status for the bracket-finding decision is the status of the *first*
+trial (i.e. if the first trial succeeds we keep going; if it fails
+the rung is the bracket boundary, regardless of whether later trials
+would have succeeded — which they shouldn't, given the first failed).
 
 Probe rows are returned with whatever `partOfVerdict` `runOneBatch`
 chose (defaults to true); the caller flips them as needed. -/
@@ -315,9 +338,11 @@ private def runDoublingProbe (spec : BenchmarkSpec) :
   let mut firstFail : Option Nat := none
   for param in ladder do
     if firstFail.isSome then break
-    let dp ← runOneBatch spec param
-    points := points.push dp
-    match dp.status with
+    let rung ← runRungTrials spec param spec.config.outerTrials
+    points := points ++ rung
+    -- The first trial decides the bracket: subsequent trials at this
+    -- rung are aggregate evidence, not bracket-finding evidence.
+    match rung[0]!.status with
     | .ok => lastOk := some param
     | _   => firstFail := some param
   return (points, lastOk, firstFail)
@@ -413,9 +438,9 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   match schedule with
   | .custom params =>
     for n in params do
-      let dp ← runOneBatch spec n
-      points := points.push dp
-      if dp.status != .ok then break
+      let rung ← runRungTrials spec n cfg.outerTrials
+      points := points ++ rung
+      if rung[0]!.status != .ok then break
   | _ =>
     let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
     points := probePoints
@@ -427,13 +452,20 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
       match lastOk?, firstFail? with
       | some lastOk, some firstFail =>
         -- Tighten the bracket using the complexity model + observed
-        -- cost at `lastOk`, so we don't burn the sweep budget on rungs
-        -- that are guaranteed to hit the cap.
+        -- cost at `lastOk`. Use the median of the trial cluster at
+        -- `lastOk` so a single noisy probe trial doesn't shift the
+        -- extrapolation. With outerTrials = 1 this is just the one
+        -- observed perCallNanos.
+        let lastOkPerCalls : Array Float :=
+          probePoints.filterMap fun dp =>
+            if dp.param == lastOk && dp.status == .ok then
+              some dp.perCallNanos
+            else none
         let lastOkPerCall : Float :=
-          (probePoints.findSome? fun dp =>
-              if dp.param == lastOk && dp.status == .ok then
-                some dp.perCallNanos
-              else none).getD 0.0
+          if lastOkPerCalls.isEmpty then 0.0
+          else
+            let sorted := lastOkPerCalls.qsort (· < ·)
+            sorted[sorted.size / 2]!
         let capNanos : Float := cfg.maxSecondsPerCall * 1.0e9
         let effFirstFail :=
           estimateFirstFail entry.complexity lastOk lastOkPerCall
@@ -444,9 +476,9 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
           -- don't enter `cMin`/`cMax`/slope.
           points := points.map ({ · with partOfVerdict := false })
           for n in rungs do
-            let dp ← runOneBatch spec n
-            points := points.push dp
-            if dp.status != .ok then break
+            let rung ← runRungTrials spec n cfg.outerTrials
+            points := points ++ rung
+            if rung[0]!.status != .ok then break
       | _, _ =>
         -- No bracket (doubling ran clean to ceiling, or first rung failed).
         -- Fall back to doubling-only — probe rows already have

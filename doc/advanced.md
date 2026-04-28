@@ -164,6 +164,82 @@ gives the steady-state cost; `lake exe bench run myFn --cache-mode cold`
 exposes the cold-state cost. The gap between the two is the warm-up
 budget your real workload either can or cannot afford to amortise.
 
+## Outer trials
+
+`--outer-trials N` (declaration-time `where { outerTrials := N }`)
+runs `N` independent measurements per ladder rung instead of one,
+and reports a per-param summary alongside the raw rows. Default is
+`1` — i.e. the v0.1 single-batch-per-param behaviour. Cost scales
+linearly with `N`: `--outer-trials 5` runs roughly 5× as long as
+`--outer-trials 1` on the same ladder.
+
+Each "outer trial" is one full child spawn — independent of the
+intra-child auto-tune loop in warm mode and independent of the
+cold-mode single-spawn-per-rung policy. Trials at the same param
+share the same `param`, but otherwise the harness does nothing to
+correlate them: each gets a fresh process with its own caches,
+allocator state, and OS scheduling.
+
+What you see in the report when `outerTrials > 1`:
+
+- The main table shows every per-trial row, tagged with
+  `[trial k/N]` so you can read the spread directly. The `C=` column
+  on each row is the same per-param ratio (computed from the median),
+  not the per-trial ratio — that's deliberate, the verdict cares
+  about per-param consistency, not per-trial scatter.
+- A `trial summaries` block after the verdict lists one line per
+  ok param with median, min, max, and `spread = (max - min) / median`.
+  A spread of `2.0%` is a tight cluster; `80.0%` is unreliable and
+  worth investigating (CPU thermals, GC pressure, neighbour load).
+
+What the verdict does with multiple trials:
+
+- The slope fit and `cMin/cMax` range check both see one robust
+  median per param, not `N` co-located samples per param. So
+  `--outer-trials 5` does **not** make the slope tolerance look
+  artificially tight by inflating sample count; it just gives you
+  a more trustworthy median.
+- Trials that fail (timed out, killed at cap, errored) don't enter
+  the median — the `okCount` field on each `TrialSummary` says how
+  many of the configured trials actually contributed.
+
+What this is not:
+
+- A statistical framework. There are no confidence intervals,
+  t-tests, bootstrap resamples, or outlier rejection. The summary
+  is descriptive: "here is the shape of the cluster you measured."
+  If you want hypothesis testing across runs, layer a separate tool
+  on top of the JSONL output (which preserves every per-trial row).
+- A noise filter. A high `spread` means the harness is reporting
+  noise honestly, not hiding it. Investigate the cause; don't
+  raise `outerTrials` further hoping the median converges.
+- An override for `signalFloorMultiplier`. A row that would be
+  flagged below the signal floor on a single-trial run is still
+  flagged below the signal floor on a multi-trial run; the median
+  is computed from `ok` rows that survived the same floor filter.
+
+When to bump `outerTrials`:
+
+- Borderline verdict. The benchmark sits near the slope-tolerance
+  edge on a single-shot run; you want to know whether the verdict
+  is a property of the algorithm or a property of yesterday's load
+  average.
+- Noisy CI. The bench job intermittently flags as inconclusive even
+  though the local laptop is rock-solid. `--outer-trials 3` or `5`
+  in CI smooths the noise without changing what the harness reports.
+- Cold-mode investigation. With `--cache-mode cold`, every rung is
+  already a single-shot timing — high noise per data point is part
+  of the design. `--outer-trials 3` gives you back the median /
+  range view that warm-mode auto-tuning produced for free.
+
+When to leave it at `1`:
+
+- Default exploration. One-batch-per-param is fast and the v0.1
+  defaults already capture the shape on most hardware.
+- Tight CI budgets. If `--max-seconds-per-call` is already a
+  binding constraint, multiplying every rung by `N` may push the
+  whole job over its time budget — measure first, multiply second.
+
 ## The per-spawn floor
 
 Every result includes
@@ -181,8 +257,9 @@ times until the param grows past where startup dominates.
 ## What this library is not
 
 - A statistical benchmarking framework. No CIs, no t-tests, no
-  outlier rejection. v0.1 uses one batch per param and trusts the
-  auto-tuner.
+  outlier rejection. The default is one batch per param; bumping
+  `--outer-trials` reports per-param median / min / max / spread
+  but is not a substitute for proper statistical analysis.
 - A profiler. Per-call time is wall time; we don't break it down
   by function or measure allocations. (Allocation tracking is on
   the v0.2 roadmap, F3.)

@@ -101,7 +101,8 @@ def configOverrideFromParsed (p : Cli.Parsed) : ConfigOverride :=
     verdictWarmupFraction? := parsedFlag? p "warmup-fraction" Float
     slopeTolerance?        := parsedFlag? p "slope-tolerance" Float
     paramSchedule?         := parsedFlag? p "param-schedule" LeanBench.ParamSchedule
-    cacheMode?             := parsedFlag? p "cache-mode" LeanBench.CacheMode }
+    cacheMode?             := parsedFlag? p "cache-mode" LeanBench.CacheMode
+    outerTrials?           := parsedFlag? p "outer-trials" Nat }
 
 /-- Build a `FixedConfigOverride` from override flags. Only fields
 that share a flag namespace with parametric (`max-seconds-per-call`)
@@ -239,6 +240,7 @@ Each missing flag leaves the declared value untouched."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
+    "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:
@@ -276,6 +278,7 @@ to every benchmark in the comparison."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
+    "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:

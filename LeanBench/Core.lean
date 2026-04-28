@@ -57,6 +57,12 @@ structure DataPoint where
       spawn-floor self-measurement so the child JSONL can stay
       schema-stable. -/
   belowSignalFloor : Bool := false
+  /-- 0-based index across the `outerTrials` independent measurements
+      taken at this `param`. `0` for benchmarks declared with the v0.1
+      default `outerTrials := 1` (so all existing fixtures parse
+      unchanged). Parent-side only — not serialized in the child JSONL;
+      the parent assigns it after each spawn returns. Issue #4. -/
+  trialIndex   : Nat := 0
   deriving Repr, Inhabited
 
 /-- Heuristic verdict — see SPEC v0.1: weak labels by design. Decided
@@ -214,6 +220,19 @@ structure BenchmarkConfig where
       retained); values ≤ 0 are rejected by `validate`. See issue
       #15 for the design discussion. -/
   signalFloorMultiplier : Float := 10.0
+  /-- Number of independent outer trials per measured rung. `1` (the
+      default) is the v0.1 behaviour: one batch per param. Bumping
+      this above 1 runs `outerTrials` separate child spawns per rung
+      and aggregates the per-call timings into a per-param median /
+      min / max / spread on `BenchmarkResult.trialSummaries`. The
+      raw per-trial points are preserved on `BenchmarkResult.points`
+      so downstream tooling and the divergence reporter stay
+      apples-to-apples. The verdict ratios are computed from the
+      median per param, so a single noisy trial no longer shifts the
+      slope fit on its own. Trade-off: total wall time scales linearly
+      with `outerTrials`. CI tunes this via `--outer-trials` to trade
+      runtime for stability. Issue #4. -/
+  outerTrials : Nat := 1
   deriving Inhabited, Repr, BEq
 
 /-- Optional run-time overrides applied on top of a benchmark's
@@ -250,6 +269,9 @@ structure ConfigOverride where
   /-- Override the cache-state policy. CLI exposes this as
       `--cache-mode warm|cold`. -/
   cacheMode?             : Option CacheMode := none
+  /-- Override the number of outer trials per measured rung. CLI
+      exposes this as `--outer-trials N`. Issue #4. -/
+  outerTrials?           : Option Nat := none
   deriving Inhabited, Repr
 
 /-- Merge a CLI `paramSchedule` override on top of a declared
@@ -282,7 +304,8 @@ def ConfigOverride.apply (o : ConfigOverride) (c : BenchmarkConfig) :
     slopeTolerance        := o.slopeTolerance?.getD        c.slopeTolerance
     killGraceMs           := o.killGraceMs?.getD           c.killGraceMs
     paramSchedule         := mergeParamSchedule o.paramSchedule? c.paramSchedule
-    cacheMode             := o.cacheMode?.getD             c.cacheMode }
+    cacheMode             := o.cacheMode?.getD             c.cacheMode
+    outerTrials           := o.outerTrials?.getD           c.outerTrials }
 
 /-- Validate a `BenchmarkConfig`. The macro accepts arbitrary user
 expressions and the CLI accepts arbitrary JSON-style numbers, so
@@ -306,6 +329,8 @@ def BenchmarkConfig.validate (c : BenchmarkConfig) : Except String Unit := do
     .error s!"BenchmarkConfig.paramFloor must be ≤ paramCeiling; got {c.paramFloor} > {c.paramCeiling}"
   unless c.signalFloorMultiplier ≥ 1.0 do
     .error s!"BenchmarkConfig.signalFloorMultiplier must be ≥ 1.0; got {c.signalFloorMultiplier}"
+  unless c.outerTrials ≥ 1 do
+    .error s!"BenchmarkConfig.outerTrials must be ≥ 1; got {c.outerTrials}"
   -- A `.custom` ladder with an empty params list is almost certainly
   -- a typo (and would produce an empty result); reject up front.
   -- Duplicate params are also rejected: the formatter keys the `C`
@@ -354,6 +379,41 @@ structure BenchmarkSpec where
 /-- `(param, C = perCallNanos / complexity param)`. Source of truth
   for the verdict. -/
 abbrev Ratio := Nat × Float
+
+/-- Aggregate timing summary for one `param` across all `outerTrials`
+independent measurements at that param.
+
+The fields capture the raw shape of the trial cluster — median, min,
+max, and a relative-spread number — without committing to any
+distributional model. With `outerTrials = 1` the harness still emits
+one summary per ok param (median = min = max, spread = 0); the same
+shape works for both `--outer-trials 1` and `--outer-trials N`, so
+downstream tooling doesn't need a special case.
+
+`perCallNanos` is in nanoseconds. `relativeSpread` is `(max - min) /
+median` — `0.10` means the worst trial was 10% above the best
+relative to the median. It is intentionally NOT a confidence interval
+or standard deviation: the v0.2 measurement model does not commit to
+a noise distribution; this is a robust shape descriptor that users
+can read at a glance.
+
+Issue #4. -/
+structure TrialSummary where
+  param          : Nat
+  /-- Number of `ok` trials that contributed to the summary. Trials
+      that timed out / were killed / errored are not counted; the
+      summary may have `okCount < BenchmarkConfig.outerTrials`. `0`
+      should not occur — the harness emits a `TrialSummary` only when
+      at least one trial succeeded. -/
+  okCount        : Nat
+  /-- Median of `perCallNanos` over the `okCount` trials. Upper
+      middle on even sample counts (matches `Stats.medianFloat`). -/
+  medianPerCallNanos : Float
+  minPerCallNanos    : Float
+  maxPerCallNanos    : Float
+  /-- `(max - min) / median`, clamped to `0.0` when `median = 0.0`. -/
+  relativeSpread     : Float
+  deriving Repr, Inhabited
 
 /-- Edge-case classifications surfaced on `BenchmarkResult.advisories`.
 Pure data — the format layer turns each into an actionable message.
@@ -432,6 +492,16 @@ structure BenchmarkResult where
       layer renders these as a hint section after the verdict line.
       Issue #15. -/
   advisories : Array Advisory := #[]
+  /-- One entry per param that produced at least one `ok` trial, in
+      ladder order. With `outerTrials := 1` (the v0.1 default) each
+      entry trivially has `okCount = 1` and `relativeSpread = 0.0`;
+      with `outerTrials > 1` the entry summarises the cluster of
+      independent measurements at that param (median / min / max /
+      spread). The verdict ratios are computed from `medianPerCallNanos`
+      so a single noisy trial doesn't shift the slope fit. The full
+      per-trial points stay on `points` for downstream tooling and
+      raw inspection. Issue #4. -/
+  trialSummaries : Array TrialSummary := #[]
   deriving Inhabited, Repr
 
 /-- One diverging param in a `compare`: the param at which results

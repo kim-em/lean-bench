@@ -17,25 +17,73 @@ open Lean
 namespace LeanBench
 namespace Stats
 
-/-- Compute the per-point ratio C = perCallNanos / complexity(param).
-    Skips param=0 and param=1 (denominator may be 0 or 1, noisy),
-    any non-`ok` data points, any rows flagged as not part of the
-    verdict (doubling-probe rows in `.linear` mode), and any rows
-    whose total wall time was dominated by spawn overhead
-    (`belowSignalFloor` — see issue #15). -/
+/-- Median of an `Array Float`. The caller is expected to have done
+    any pre-filtering (we don't know what 'invalid' means here).
+    Returns `0.0` on an empty array — callers should check before
+    calling and skip the param entirely if no usable data exists.
+    Upper-middle on even sample counts to match `Run.medianNat`'s
+    convention (conservative for regression flagging). -/
+def medianFloat (xs : Array Float) : Float :=
+  if xs.isEmpty then 0.0
+  else
+    let sorted := xs.qsort (· < ·)
+    sorted[sorted.size / 2]!
+
+/-- Verdict-eligible per-call timings at `param` from `points`. Skips
+    rows that error / time out / are doubling-probe rows / are below
+    the signal floor — same filter as `ratiosFromPoints`. Exposed
+    (not `private`) for the `TrialSummary` reduction in `summarize`. -/
+def verdictPerCallsAt (param : Nat) (points : Array DataPoint) :
+    Array Float :=
+  points.filterMap fun dp =>
+    if dp.param == param && dp.status == .ok && dp.partOfVerdict
+        && !dp.belowSignalFloor then
+      some dp.perCallNanos
+    else none
+
+/-- Distinct verdict-eligible params from `points`, in ladder order
+    (first-occurrence). Used to drive both `ratiosFromPoints` and the
+    `TrialSummary` reduction so the two stay in lockstep. -/
+private def verdictParamsInOrder (points : Array DataPoint) : Array Nat :=
+  Id.run do
+    let mut acc : Array Nat := #[]
+    let mut seen : Std.HashSet Nat := {}
+    for dp in points do
+      if dp.status != .ok then continue
+      if !dp.partOfVerdict then continue
+      if dp.belowSignalFloor then continue
+      unless seen.contains dp.param do
+        seen := seen.insert dp.param
+        acc := acc.push dp.param
+    return acc
+
+/-- Compute the per-param ratio C = median(perCallNanos at param) /
+    complexity(param), one entry per distinct verdict-eligible param.
+    Skips param=0 and param=1 (denominator may be 0 or 1, noisy), any
+    non-`ok` data points, doubling-probe rows in `.linear` mode, and
+    rows whose total wall time was dominated by spawn overhead
+    (`belowSignalFloor` — see issue #15).
+
+    With `outerTrials = 1` (the v0.1 default) each param has exactly
+    one verdict-eligible row, so the median is that single row's
+    `perCallNanos` — i.e. behaviour is identical to v0.1. With
+    `outerTrials > 1` the slope fit and the `cMin`/`cMax` range check
+    both see one robust per-param point rather than `outerTrials`
+    co-located samples that would corrupt the fit's degrees of
+    freedom. Issue #4. -/
 def ratiosFromPoints
     (complexity : Nat → Nat)
     (points : Array DataPoint) :
     Array Ratio := Id.run do
   let mut acc : Array Ratio := #[]
-  for dp in points do
-    if dp.param < 2 then continue
-    if dp.status != .ok then continue
-    if !dp.partOfVerdict then continue
-    if dp.belowSignalFloor then continue
-    let d := complexity dp.param
+  for p in verdictParamsInOrder points do
+    if p < 2 then continue
+    let d := complexity p
     if d == 0 then continue
-    acc := acc.push (dp.param, dp.perCallNanos / d.toFloat)
+    let perCalls := verdictPerCallsAt p points
+    if perCalls.isEmpty then continue
+    let median := medianFloat perCalls
+    acc := acc.push (p, median / d.toFloat)
   return acc
 
 /-- OLS slope of the points `(x, y)`. `none` if there are fewer than
@@ -181,6 +229,34 @@ def computeAdvisories (points : Array DataPoint) (verdictRows : Nat) :
     out := out.push (.tooFewVerdictRows verdictRows)
   return out
 
+/-- Per-param trial summaries. Walks `points` once, groups verdict-
+    eligible `ok` rows by `param`, and emits one `TrialSummary` per
+    param with median / min / max / relative-spread over the cluster.
+    Order is first-occurrence in `points`, matching `ratiosFromPoints`.
+
+    A param with zero verdict-eligible rows is skipped (its ratio is
+    skipped too, so the two stay aligned). With `outerTrials = 1` each
+    summary has `okCount = 1`, `relativeSpread = 0.0`, and
+    `min = median = max`. -/
+def trialSummariesFromPoints (points : Array DataPoint) :
+    Array TrialSummary := Id.run do
+  let mut acc : Array TrialSummary := #[]
+  for p in verdictParamsInOrder points do
+    let perCalls := verdictPerCallsAt p points
+    if perCalls.isEmpty then continue
+    let median := medianFloat perCalls
+    let lo := perCalls.foldl min perCalls[0]!
+    let hi := perCalls.foldl max perCalls[0]!
+    let spread :=
+      if median > 0.0 then (hi - lo) / median else 0.0
+    acc := acc.push {
+      param := p, okCount := perCalls.size,
+      medianPerCallNanos := median,
+      minPerCallNanos := lo,
+      maxPerCallNanos := hi,
+      relativeSpread := spread }
+  return acc
+
 /-- Build a `BenchmarkResult` from spec + complexity closure + collected points.
 
     `points` should already carry `belowSignalFloor` annotations;
@@ -200,6 +276,7 @@ def summarize
       spec.config.slopeTolerance spec.config.narrowRangeNoiseFloor
   let kept := ratios.size - dropped
   let advisories := computeAdvisories points kept
+  let trialSummaries := trialSummariesFromPoints points
   { function := spec.name
   , complexityFormula := spec.complexityFormula
   , hashable := spec.hashable
@@ -211,7 +288,8 @@ def summarize
   , cMax?
   , verdictDroppedLeading := dropped
   , slope?
-  , advisories }
+  , advisories
+  , trialSummaries }
 
 end Stats
 end LeanBench
