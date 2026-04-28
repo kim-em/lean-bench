@@ -11,19 +11,23 @@ read / parse / synthesize pipeline against a real subprocess.
 
 The benchmark function is deliberately tiny (a single `XOR` per
 iteration) and the config caps `paramCeiling := 8` and
-`maxSecondsPerCall := 0.25`, so the whole test runs in well under a
-second on any reasonable host.
+`maxSecondsPerCall := 0.5` with a `targetInnerNanos := 50_000_000`
+inner-tune budget, so the whole test runs in ~1.3s on a Linux host.
 
 What's pinned:
 
-- `runBenchmark`: every `ok` point has a non-zero hash, the verdict
-  resolves (not stuck), and the ratios array is non-empty.
-- `compare` (parametric, two functions): both per-function results
-  are present, `commonParams` is the intersection of their measured
-  params, and `agreeOnCommon` reports `divergedAt` when the two
-  benchmarks return distinguishable hashes.
-- `compare` (parametric, two identical functions): `agreeOnCommon`
-  reports `allAgreed`.
+- `list`: every registered benchmark appears in the runtime registry
+  AND `Cli.dispatch ["list"]` exits 0 against a populated registry.
+- `runBenchmark`: at least one `ok` point lands in the ladder, every
+  `ok` row has a `Hashable`-derived hash, `ratios` is non-empty,
+  the verdict resolves (not stuck on `Inhabited`), and the
+  complexity formula round-trips from `setup_benchmark`.
+- `compare` (two distinguishable functions): both per-function
+  results are present, `commonParams` equals the actual intersection
+  of measured params (computed independently in the test), and
+  `agreeOnCommon` reports `divergedAt`.
+- `compare` (two identical functions): `agreeOnCommon` reports
+  `allAgreed`.
 - Unregistered name → `runBenchmark` throws a `userError` mentioning
   the name (so the CLI can print it cleanly).
 -/
