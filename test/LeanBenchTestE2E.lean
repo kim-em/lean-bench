@@ -62,15 +62,27 @@ def littleFnTwin (n : Nat) : UInt64 := Id.run do
 With the default `targetInnerNanos := 500_000_000`, autoTune wants
 ~250ms of inner work per batch — that overshoots a 0.25s cap once the
 final doubling step lands past the half-target. Lower the inner
-target so even slow CI hosts converge before the kill timer fires. -/
+target so even slow CI hosts converge before the kill timer fires.
+
+`signalFloorMultiplier := 1.0` disables the issue #15 below-floor
+filter. The XOR loop is so trivially fast that with the default 10×
+multiplier every row ends up below the floor and `ratios` would be
+empty — that's the expected behavior on real fast benchmarks (issue
+#15 explicitly), but it would mask the e2e regression we want to
+guard here (subprocess pipeline returning real measurements). The
+issue #15 advisory path has dedicated coverage in
+`LeanBenchTestAdvisory.lean`. -/
 setup_benchmark littleFn n => n where {
   maxSecondsPerCall := 0.5, paramCeiling := 8, targetInnerNanos := 50_000_000
+  signalFloorMultiplier := 1.0
 }
 setup_benchmark littleFn' n => n where {
   maxSecondsPerCall := 0.5, paramCeiling := 8, targetInnerNanos := 50_000_000
+  signalFloorMultiplier := 1.0
 }
 setup_benchmark littleFnTwin n => n where {
   maxSecondsPerCall := 0.5, paramCeiling := 8, targetInnerNanos := 50_000_000
+  signalFloorMultiplier := 1.0
 }
 
 end LeanBench.Test.E2E

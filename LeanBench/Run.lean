@@ -322,14 +322,43 @@ private def runDoublingProbe (spec : BenchmarkSpec) :
     | _   => firstFail := some param
   return (points, lastOk, firstFail)
 
-/-- Resolve `.auto` to either `.doubling` or a sensible `.linear`. -/
+/-- Resolve `.auto` to either `.doubling` or a sensible `.linear`.
+    `.custom` and the explicit shapes pass through unchanged. -/
 private def resolveSchedule (cfg : BenchmarkConfig) (complexity : Nat → Nat) :
     ParamSchedule :=
   match cfg.paramSchedule with
   | .doubling => .doubling
   | .linear samples => .linear samples
+  | .custom params => .custom params
   | .auto =>
     if autoPicksLinear complexity then .linear 16 else .doubling
+
+/-- Annotate every point with `belowSignalFloor` based on the
+    measured per-spawn floor. A row crosses the threshold when its
+    `totalNanos` is below `multiplier × spawnFloor` — small enough
+    that subprocess overhead dominates the inner-loop work and the
+    measurement is unreliable as algorithm timing.
+
+    `multiplier ≤ 1.0` disables the check (every row is left
+    unflagged); `spawnFloorNanos = 0` (or `none`) likewise leaves
+    everything unflagged because we have no reference to compare
+    against. Issue #15. -/
+def annotateBelowSignalFloor (multiplier : Float)
+    (spawnFloorNanos? : Option Nat) (points : Array DataPoint) :
+    Array DataPoint :=
+  match spawnFloorNanos? with
+  | none => points
+  | some sf =>
+    if multiplier ≤ 1.0 || sf == 0 then points
+    else
+      let threshold : Float := multiplier * sf.toFloat
+      points.map fun dp =>
+        match dp.status with
+        | .ok =>
+          if dp.totalNanos.toFloat < threshold then
+            { dp with belowSignalFloor := true }
+          else dp
+        | _ => dp
 
 /-- Measure the per-spawn floor: spawn the child against the first
     available benchmark with a 1µs target. The result is dominated by
@@ -376,42 +405,59 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   | .ok () => pure ()
   let spec := { entry.spec with config := cfg }
   let schedule := resolveSchedule cfg entry.complexity
-  let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
-  let mut points := probePoints
+  -- `.custom` skips the doubling probe entirely — we walk the
+  -- user-supplied params in order and stop when one hits the cap.
+  -- For all other schedules the probe runs first and then optionally
+  -- a linear bracket sweep is added.
+  let mut points : Array DataPoint := #[]
   match schedule with
-  | .doubling => pure ()
-  | .auto => pure ()  -- unreachable after resolveSchedule
-  | .linear samples =>
-    match lastOk?, firstFail? with
-    | some lastOk, some firstFail =>
-      -- Tighten the bracket using the complexity model + observed
-      -- cost at `lastOk`, so we don't burn the sweep budget on rungs
-      -- that are guaranteed to hit the cap.
-      let lastOkPerCall : Float :=
-        (probePoints.findSome? fun dp =>
-            if dp.param == lastOk && dp.status == .ok then
-              some dp.perCallNanos
-            else none).getD 0.0
-      let capNanos : Float := cfg.maxSecondsPerCall * 1.0e9
-      let effFirstFail :=
-        estimateFirstFail entry.complexity lastOk lastOkPerCall
-          capNanos firstFail
-      let rungs := pickLinearRungs lastOk effFirstFail samples
-      if !rungs.isEmpty then
-        -- Probe rows are bracket-finding only; demote them so they
-        -- don't enter `cMin`/`cMax`/slope.
-        points := points.map ({ · with partOfVerdict := false })
-        for n in rungs do
-          let dp ← runOneBatch spec n
-          points := points.push dp
-          if dp.status != .ok then break
-    | _, _ =>
-      -- No bracket (doubling ran clean to ceiling, or first rung failed).
-      -- Fall back to doubling-only — probe rows already have
-      -- `partOfVerdict := true`.
-      pure ()
+  | .custom params =>
+    for n in params do
+      let dp ← runOneBatch spec n
+      points := points.push dp
+      if dp.status != .ok then break
+  | _ =>
+    let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
+    points := probePoints
+    match schedule with
+    | .doubling => pure ()
+    | .custom _ => pure ()  -- unreachable in this branch
+    | .auto => pure ()  -- unreachable after resolveSchedule
+    | .linear samples =>
+      match lastOk?, firstFail? with
+      | some lastOk, some firstFail =>
+        -- Tighten the bracket using the complexity model + observed
+        -- cost at `lastOk`, so we don't burn the sweep budget on rungs
+        -- that are guaranteed to hit the cap.
+        let lastOkPerCall : Float :=
+          (probePoints.findSome? fun dp =>
+              if dp.param == lastOk && dp.status == .ok then
+                some dp.perCallNanos
+              else none).getD 0.0
+        let capNanos : Float := cfg.maxSecondsPerCall * 1.0e9
+        let effFirstFail :=
+          estimateFirstFail entry.complexity lastOk lastOkPerCall
+            capNanos firstFail
+        let rungs := pickLinearRungs lastOk effFirstFail samples
+        if !rungs.isEmpty then
+          -- Probe rows are bracket-finding only; demote them so they
+          -- don't enter `cMin`/`cMax`/slope.
+          points := points.map ({ · with partOfVerdict := false })
+          for n in rungs do
+            let dp ← runOneBatch spec n
+            points := points.push dp
+            if dp.status != .ok then break
+      | _, _ =>
+        -- No bracket (doubling ran clean to ceiling, or first rung failed).
+        -- Fall back to doubling-only — probe rows already have
+        -- `partOfVerdict := true`.
+        pure ()
   let spawnFloor ← measureSpawnFloor
-  let summary := Stats.summarize spec entry.complexity points
+  -- Annotate below-floor rows BEFORE summarising so the verdict
+  -- ratios and the advisory list see the same filtered view.
+  let annotated :=
+    annotateBelowSignalFloor cfg.signalFloorMultiplier spawnFloor points
+  let summary := Stats.summarize spec entry.complexity annotated
   return { summary with spawnFloorNanos? := spawnFloor }
 
 /-! ## Fixed-benchmark orchestration -/

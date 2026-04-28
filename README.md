@@ -135,7 +135,12 @@ rationale, including limits and known caveats.
 
 Each measurement is a child process, so very fast operations have a
 per-spawn noise floor in the milliseconds. The harness measures this
-floor itself and prints it with every report.
+floor itself and prints it with every report; rows whose total wall
+time is below `signalFloorMultiplier × floor` (default 10×) are
+flagged `[<floor]` and excluded from the verdict, with an actionable
+advisory line at the bottom of the report. For workloads that don't
+fit the built-in `auto` / `doubling` / `linear` ladders, declare a
+custom one with `where { paramSchedule := .custom #[…] }`.
 
 Lean's `Nat` is bignum, the compiler hoists pure work out of loops
 unless its result is observed, and reference-counted sharing can

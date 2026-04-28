@@ -181,6 +181,23 @@ mode is universally better — they measure different things; see
 each. Pin a benchmark in cold mode at declaration time via
 `where { cacheMode := .cold }`.
 
+For workloads that don't fit any built-in ladder — corpus inputs
+where the natural `n` values are non-uniform, or a single-rung
+"this is the size that matters" run — declare a custom ladder:
+
+```lean
+setup_benchmark cornerCase n => n where {
+  paramSchedule := .custom #[1, 100, 10_000, 1_000_000]
+}
+```
+
+`.custom` skips the doubling probe and the linear-bracket sweep
+entirely; the harness walks the declared params in order and stops
+when one hits the wallclock cap. There is no CLI flag for `.custom`
+because the param list can't be cleanly expressed as one — declare
+it at registration time. An empty `.custom #[]` is rejected by
+config validation.
+
 `--warmup-fraction F` drops the leading `F` × ratios.size data points
 from the verdict reduction (the cold regime where per-call overhead
 dominates the declared complexity); the raw ratios array still
@@ -206,9 +223,22 @@ line; its sign tells you the direction of any mismatch (positive →
 actually slower than declared, negative → actually faster).
 
 The harness prints its own per-spawn floor as part of the report. Any
-data point with `total_nanos` smaller than ~10× the spawn floor is
-noise, not algorithm data — interpret it as a lower bound, not a
-measurement.
+data point with `total_nanos` smaller than `signalFloorMultiplier ×
+spawn_floor` (default 10×) is flagged with `[<floor]` in the table
+and excluded from the verdict — its per-call time is dominated by
+subprocess-spawn cost, not the function under test. Tune the
+threshold via `where { signalFloorMultiplier := 5.0 }` (looser) or
+`signalFloorMultiplier := 1.0` to disable the filter entirely.
+
+When the harness can't trust the data — every row was below the
+floor, every row hit the cap, the ladder was truncated by the cap,
+or fewer than three rows survived the verdict reduction — it
+appends one or more `‼` advisory lines after the verdict, each
+naming a concrete knob to turn next (`--max-seconds-per-call`,
+`--param-ceiling`, `paramSchedule := .custom #[...]`,
+`setup_fixed_benchmark`, …). The advisory text is the actionable
+half of issue #15; the underlying classifications live on
+`BenchmarkResult.advisories` for downstream tooling.
 
 ## What `compare` shows on divergence
 
