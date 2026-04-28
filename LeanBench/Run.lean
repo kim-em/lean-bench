@@ -2,6 +2,7 @@ import Lean
 import Std.Sync.Mutex
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.Schema
 import LeanBench.Stats
 
 /-!
@@ -62,9 +63,29 @@ private def parseHexU64 (s : String) : Option UInt64 := do
     acc * 16 + d
   return n.toUInt64
 
-/-- Parse the child's JSONL row into a `DataPoint`. -/
+/-- Parse the child's JSONL row into a `DataPoint`.
+
+Schema-compatibility contract (see [`doc/schema.md`](../../doc/schema.md)):
+
+- `schema_version > Schema.schemaVersion` is rejected with an
+  explicit error. A missing `schema_version` is tolerated for
+  back-compat and treated as v1.
+- Required fields (`param`, `inner_repeats`, `total_nanos`, `status`)
+  are still required; absence is a parse error.
+- Optional fields (`per_call_nanos`, `result_hash`, `error`) are
+  tolerated when missing or `null`.
+- Unknown extra keys are ignored — that's the forward-compat lever
+  that lets future PRs add fields (memory metrics, env metadata,
+  budget tags, …) without rewriting every reader. -/
 def parseChildRow (line : String) : Except String DataPoint := do
   let json ← Json.parse line
+  Schema.checkVersion json
+  Schema.checkKind Schema.kindParametric json
+  -- `function` is required by the schema. The parent already knows
+  -- what it dispatched, but external tooling reading raw JSONL needs
+  -- this as a sanity check, so the parser still requires its
+  -- presence.
+  let _ ← json.getObjValAs? String "function"
   let param ← json.getObjValAs? Nat "param"
   let innerRepeats ← json.getObjValAs? Nat "inner_repeats"
   let totalNanos ← json.getObjValAs? Nat "total_nanos"
@@ -377,9 +398,13 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
 
 /-! ## Fixed-benchmark orchestration -/
 
-/-- Parse one fixed-benchmark JSONL row into a `FixedDataPoint`. -/
+/-- Parse one fixed-benchmark JSONL row into a `FixedDataPoint`.
+    Same schema-compatibility contract as `parseChildRow`. -/
 def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
   let json ← Json.parse line
+  Schema.checkVersion json
+  Schema.checkKind Schema.kindFixed json
+  let _ ← json.getObjValAs? String "function"
   let repeatIndex ← json.getObjValAs? Nat "repeat_index"
   let totalNanos ← json.getObjValAs? Nat "total_nanos"
   let resultHash : Option UInt64 :=
