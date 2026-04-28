@@ -198,6 +198,48 @@ data point with `total_nanos` smaller than ~10× the spawn floor is
 noise, not algorithm data — interpret it as a lower bound, not a
 measurement.
 
+## What `compare` shows on divergence
+
+`compare A B [C …]` runs each named benchmark, intersects their
+common params, and hashes every result. When the hashes disagree
+the report highlights the earliest common param where any pair
+disagreed, lays the per-function hash table side-by-side, and tags
+each dissenting implementation with the baseline it disagrees with
+(the first listed implementation). Later disagreements appear on a
+compact `also diverged at:` line so you can tell a one-off
+mismatch from a fundamental disagreement.
+
+```
+agreement: DIVERGED on 2 params — earliest divergence at param=4:
+    MyApp.fastSort  hash=0xabc    (baseline)
+    MyApp.slowSort  hash=0xdef    differs from MyApp.fastSort
+  also diverged at: 8
+```
+
+Today only hashes are recorded — no string preview of the result is
+captured. A 64-bit hash tells you *that* two implementations
+disagree but not *what* the outputs were. The recommended workflow
+when you see a divergence:
+
+1. Note the earliest diverging param `n` and the implementations
+   involved from the report.
+2. Run each implementation directly at that input and inspect the
+   results yourself, e.g. via `#eval MyApp.fastSort (gen 4)` and
+   `#eval MyApp.slowSort (gen 4)` in a Lean file alongside the
+   benchmarks. Pick a small `n` so the output is human-readable.
+3. If the implementations take a prepared input (`with prep := …`),
+   construct that input the same way the prep does and feed it to
+   both directly.
+
+If at least one of the compared functions has a non-`Hashable`
+return type, `compare` cannot check agreement at all and reports
+`agreement: cannot check — no Hashable instance for: <name(s)>`.
+The fix is to add `deriving Hashable` (or write a manual instance)
+on the return type so the harness can record hashes. Future
+versions may add an optional preview field on top of the hashes;
+the wire format already tolerates additive optional fields without
+a schema bump (see [`schema.md`](schema.md)).
+
 ## Fixed-problem benchmarks
 
 Sometimes you don't have a parameter to walk: there's a single hard

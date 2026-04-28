@@ -12,8 +12,8 @@ through its own (auto-picked) ladder, then prints:
 - the `commonParams` intersection (the params at which every
   function produced an `ok` row)
 - `agreement` over those params: all agreed, diverged at specific
-  (function, function, param) triples, or hash unavailable (when at
-  least one function's return type lacks `Hashable`)
+  params, or hash unavailable (when at least one function's return
+  type lacks `Hashable`)
 
 A function whose ladder stops early (because its complexity rises
 faster) doesn't break the comparison — its rows are preserved and
@@ -23,7 +23,37 @@ The Hashable opt-in: `setup_benchmark` synthesizes `Hashable α`
 once at registration. If it succeeds, every measurement records the
 hash and `compare` checks them. If not, `runChecked` still forces
 the result (so the benchmark measures real work) but writes
-`result_hash := none`, and `compare` reports `hashUnavailable`.
+`result_hash := none`, and `compare` reports `hashUnavailable` and
+names the offending registration so you know which return type to
+fix.
+
+### Reading a divergence report
+
+When `compare` finds disagreement, the summary highlights the
+**earliest** common param at which any pair of implementations
+produced different output, lays the per-function hash table out
+side-by-side, and tags each non-baseline implementation with the
+baseline it disagrees with. The first listed implementation
+(`compare A B C` → `A`) is the comparison baseline. Example:
+
+```
+common params (apples-to-apples): 2, 4, 8
+agreement: DIVERGED on 2 params — earliest divergence at param=4:
+    Sample.linearFn  hash=0xabc    (baseline)
+    Sample.otherFn   hash=0xdef    differs from Sample.linearFn
+  also diverged at: 8
+  (only result hashes are available; see doc/quickstart.md for what to expect)
+```
+
+Hashes are reported as hex literals. The `also diverged at:` line
+lists every later common param where any pair still disagreed —
+useful for telling "one off-by-one bug at small n" from "the two
+implementations are entirely different functions". Result *previews*
+(short string snapshots of the actual return values) are not
+recorded today — the wire format only carries hashes, and a 64-bit
+hash gives no way to recover the input. See
+[quickstart.md](quickstart.md#what-compare-shows-on-divergence) for
+the recommended debugging workflow when only hashes are available.
 
 ## Reading the verdict
 

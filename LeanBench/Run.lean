@@ -561,6 +561,7 @@ def runFixedBenchmark (name : Lean.Name)
   let hashesAgree := computeHashAgreement points
   return {
     function := name
+    hashable := entry.spec.hashable
     config := cfg
     points
     medianNanos?

@@ -55,13 +55,25 @@ implementation; baseline-diff flags the regression.
 
 ## F6. Output-hash divergence reports
 
-When `compare` finds two functions disagree on `agreeOnCommon`, the
-report includes a hex preview of each function's output (or first
-N bytes if it can serialize) so the divergence is debuggable.
+The hash-only side landed in issue #7: `compare` now reports the
+earliest diverging param, names the implementations involved, lays
+the per-function hash table side-by-side, and tags each dissenter
+with the baseline it disagrees with. What's still missing is a
+*preview* of each function's actual output (first N bytes /
+serialized prefix) so the divergence is fully debuggable without
+re-running the function in a Lean file.
+
+Plan: add an optional `result_preview : string | null` field to the
+JSONL row (additive — no schema bump needed; see
+[`doc/schema.md`](doc/schema.md)), populate it from `setup_benchmark`
+when `ToString α` synthesizes (truncated to ~80 characters), and
+extend the formatter to surface the preview alongside the hash on
+the divergence line.
 
 Acceptance: comparing `goodFib` and a deliberately-buggy `goodFib'`
-emits a diff report that names both implementations and shows the
-first-diverging param.
+emits a divergence report whose earliest-divergence block carries a
+visible string preview of each implementation's return value at
+that param, in addition to the hash.
 
 ## F7. CI-budget mode
 
