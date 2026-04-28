@@ -314,4 +314,164 @@ where
         config := {} }
     modifyEnv (addSpec · spec)
 
+/-! ## `setup_fixed_benchmark` — fixed-problem registration
+
+```lean
+setup_fixed_benchmark Hex.Foo.factorXOverFTwo
+setup_fixed_benchmark MyBench.lllReduce30 where {
+  repeats := 10
+  maxSecondsPerCall := 30.0
+}
+```
+
+The registered name must resolve to a value of type `α` (pure) or
+`IO α` (effectful). There is no parameter and no complexity model —
+the benchmark exists to record an absolute wall-clock time on a
+canonical input. The harness performs one warmup call followed by
+`config.repeats` measured calls and reports median / min / max plus
+a hash-agreement check across repeats.
+
+If `α` has a `Hashable` instance, every measured call's result is
+hashed; cross-repeat hash agreement guards against non-determinism.
+Without `Hashable`, the comparison falls back to timing only. -/
+
+/-- Inspect a registered name's type. Returns `(elementTy, isIO)`
+where `elementTy` is `α` for both `α` and `IO α` cases. The IO check
+is semantic, not syntactic: we try to unify the declared type against
+`IO ?α`, which means `EIO IO.Error α`, `BaseIO α` (after reducible
+unfolding), and any reducible alias of `IO` are all accepted. A bare
+syntactic `isAppOfArity ``IO 1` would miss those and silently
+benchmark the IO action as a pure value (a serious correctness bug),
+so we use full `isDefEq`.
+
+Rejects anything with an unbound function arrow — fixed benchmarks
+are values, not functions. -/
+def expectFixedValue (env : Environment) (declName : Name) :
+    CommandElabM (Expr × Bool) := do
+  let some ci := env.find? declName
+    | throwError "setup_fixed_benchmark: name `{declName}` is not defined"
+  let ty := ci.type
+  -- Function-arrow types are rejected up front — they are a category
+  -- error for `setup_fixed_benchmark` (use the parametric form).
+  if ty.isForall then
+    throwError "setup_fixed_benchmark: name `{declName}` must be a value or `IO α`; got function type `{ty}`"
+  liftTermElabM do
+    -- Try to unify against `IO ?α`. If that succeeds, the value is an
+    -- IO action; the unifier instantiates `?α` to the element type.
+    let α ← Meta.mkFreshExprMVar (mkSort Level.one)
+    let ioα ← Meta.mkAppM ``IO #[α]
+    if (← Meta.isDefEq ty ioα) then
+      let elemTy ← instantiateMVars α
+      return (elemTy, true)
+    return (ty, false)
+
+syntax (name := setupFixedBenchmark) "setup_fixed_benchmark "
+  ident (setupBenchmarkWhere)? : command
+
+@[command_elab setupFixedBenchmark]
+def elabSetupFixedBenchmark : CommandElab := fun stx => do
+  match stx with
+  | `(command| setup_fixed_benchmark $fnId:ident) =>
+    elabCore fnId none
+  | `(command| setup_fixed_benchmark $fnId:ident $w:setupBenchmarkWhere) =>
+    elabCore fnId (some w)
+  | _ => throwUnsupportedSyntax
+where
+  elabCore (fnId : Ident)
+      (whereClause? : Option (TSyntax `LeanBench.setupBenchmarkWhere)) :
+      CommandElabM Unit := do
+    let env ← getEnv
+    let ns ← getCurrNamespace
+    let fnName := resolveDecl env ns fnId
+    let (resTy, isIO) ← expectFixedValue env fnName
+    let isHashable ← hasHashable resTy
+    let configTerm? : Option Term ← match whereClause? with
+      | none => pure none
+      | some w => match w with
+        | `(setupBenchmarkWhere| where $t:term) => pure (some t)
+        | _ => throwErrorAt w "setup_fixed_benchmark: malformed `where` clause"
+    let rName := fnName.str "_leanBench_fixedRunner"
+    let cfgDeclName := fnName.str "_leanBench_fixedConfig"
+    let rIdent := mkIdent rName
+    let cfgIdent := mkIdent cfgDeclName
+    -- Auto-def the runner. Four shapes from the cross-product of
+    -- `(isIO, isHashable)`. All bracket the timer around exactly one
+    -- invocation of the registered value; the result is forced via
+    -- `blackBox` to defeat dead-code elimination, just like the
+    -- parametric path.
+    let mkRunner : CommandElabM (TSyntax `command) :=
+      match isIO, isHashable with
+      | true, true =>
+        `(command|
+          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+            let t₀ ← IO.monoNanosNow
+            let r ← ($fnId : IO _)
+            let h := Hashable.hash r
+            LeanBench.blackBox h
+            let t₁ ← IO.monoNanosNow
+            return (t₁ - t₀, some h))
+      | true, false =>
+        `(command|
+          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+            let t₀ ← IO.monoNanosNow
+            let r ← ($fnId : IO _)
+            LeanBench.blackBox (Hashable.hash (sizeOf r))
+            let t₁ ← IO.monoNanosNow
+            return (t₁ - t₀, none))
+      | false, true =>
+        `(command|
+          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+            let t₀ ← IO.monoNanosNow
+            let r := $fnId
+            let h := Hashable.hash r
+            LeanBench.blackBox h
+            let t₁ ← IO.monoNanosNow
+            return (t₁ - t₀, some h))
+      | false, false =>
+        `(command|
+          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+            let t₀ ← IO.monoNanosNow
+            let r := $fnId
+            LeanBench.blackBox (Hashable.hash (sizeOf r))
+            let t₁ ← IO.monoNanosNow
+            return (t₁ - t₀, none))
+    elabCommand (← mkRunner)
+    -- Per-benchmark config def, like the parametric path.
+    match configTerm? with
+    | none =>
+      elabCommand <| ← `(command|
+        def $cfgIdent : LeanBench.FixedBenchmarkConfig := {})
+    | some t =>
+      elabCommand <| ← `(command|
+        def $cfgIdent : LeanBench.FixedBenchmarkConfig := $t)
+    let fnNameSyn  : Term := quote fnName
+    let rNameSyn   : Term := quote rName
+    let cfgNameSyn : Term := quote cfgDeclName
+    let isHashableSyn := mkIdent (if isHashable then ``true else ``false)
+    elabCommand <| ← `(command|
+      initialize do
+        LeanBench.registerFixed
+          { name := $fnNameSyn
+            runnerName := $rNameSyn
+            configDeclName := $cfgNameSyn
+            hashable := $isHashableSyn
+            config := $cfgIdent }
+          $rIdent)
+    -- Persistent extension stores `config := {}` as a placeholder; the
+    -- authoritative declared-config value is the auto-generated def
+    -- pointed at by `configDeclName`. This mirrors the parametric
+    -- convention (see `BenchmarkSpec` registration above): keeping the
+    -- persistent extension free of unsafe elaboration-time evaluation
+    -- while still giving downstream tooling a stable handle on the
+    -- declared overrides via `env.find? spec.configDeclName`. The
+    -- runtime registry holds the elaborated `FixedBenchmarkConfig`
+    -- value directly.
+    let spec : FixedSpec :=
+      { name := fnName
+        runnerName := rName
+        configDeclName := cfgDeclName
+        hashable := isHashable
+        config := {} }
+    modifyEnv (addFixedSpec · spec)
+
 end LeanBench

@@ -88,20 +88,90 @@ def verifyOne (spec : BenchmarkSpec) : IO VerifyReport := do
     checks := checks.push { param, point := dp, failure }
   return { spec, checks }
 
+/-! ## Fixed-benchmark verification
+
+A single one-shot child invocation per fixed benchmark, with the
+spec's own kill cap but the standard cheap warmup-off shape. Same
+classification logic as the parametric path but specialised to
+fixed-benchmark data. -/
+
+/-- One check inside a `FixedVerifyReport`. -/
+structure FixedVerifyCheck where
+  point   : FixedDataPoint
+  failure : Option String
+  deriving Inhabited
+
+def FixedVerifyCheck.passed (c : FixedVerifyCheck) : Bool := c.failure.isNone
+
+structure FixedVerifyReport where
+  spec   : FixedSpec
+  checks : Array FixedVerifyCheck
+  deriving Inhabited
+
+def FixedVerifyReport.passed (r : FixedVerifyReport) : Bool :=
+  r.checks.all (·.passed)
+
+def classifyFixedCheck (spec : FixedSpec) (dp : FixedDataPoint) : Option String :=
+  match dp.status with
+  | .ok =>
+    if spec.hashable && dp.resultHash.isNone then
+      some "hashable fixed benchmark but child returned no result_hash"
+    else
+      none
+  | .timedOut    => some "timed out on warmup invocation"
+  | .killedAtCap => some "killed at maxSecondsPerCall cap on warmup invocation"
+  | .error msg   => some s!"child error: {msg}"
+
+/-- Verify one registered fixed benchmark by spawning a single
+    one-shot child run. The spec's `maxSecondsPerCall` cap applies. -/
+def verifyFixedOne (spec : FixedSpec) : IO FixedVerifyReport := do
+  let dp ← runFixedOneBatch spec spec.config 0
+  let failure := classifyFixedCheck spec dp
+  return { spec, checks := #[{ point := dp, failure }] }
+
+/-! ## Combined verify across both registries -/
+
+/-- Result of a `verify` run: parametric reports first, then fixed
+    reports. Either array can be empty. -/
+structure CombinedVerifyReports where
+  parametric : Array VerifyReport
+  fixed      : Array FixedVerifyReport
+  deriving Inhabited
+
+def CombinedVerifyReports.passed (r : CombinedVerifyReports) : Bool :=
+  r.parametric.all (·.passed) && r.fixed.all (·.passed)
+
+def CombinedVerifyReports.totalCount (r : CombinedVerifyReports) : Nat :=
+  r.parametric.size + r.fixed.size
+
+def CombinedVerifyReports.failedCount (r : CombinedVerifyReports) : Nat :=
+  (r.parametric.filter (! ·.passed)).size +
+  (r.fixed.filter (! ·.passed)).size
+
 /-- Verify the named benchmarks (or all of them, if `names` is empty).
+    Resolves each name against both the parametric and fixed
+    registries; an unregistered name throws.
 
     Throws `IO.userError` for any name that isn't registered, so the
     caller can surface the failure cleanly to the user. -/
-def verify (names : List Lean.Name) : IO (Array VerifyReport) := do
-  let entries ← match names with
-    | []    => allRuntimeEntries
-    | names =>
-      let mut acc : Array RuntimeEntry := #[]
-      for n in names do
-        match ← findRuntimeEntry n with
-        | some e => acc := acc.push e
-        | none   => throw (.userError s!"unregistered benchmark: {n}")
-      pure acc
-  entries.mapM (fun e => verifyOne e.spec)
+def verify (names : List Lean.Name) : IO CombinedVerifyReports := do
+  match names with
+  | [] =>
+    let pEntries ← allRuntimeEntries
+    let fEntries ← allFixedRuntimeEntries
+    let parametric ← pEntries.mapM fun e => verifyOne e.spec
+    let fixed ← fEntries.mapM fun e => verifyFixedOne e.spec
+    return { parametric, fixed }
+  | _ =>
+    let mut parametric : Array VerifyReport := #[]
+    let mut fixed : Array FixedVerifyReport := #[]
+    for n in names do
+      match ← findRuntimeEntry n with
+      | some e => parametric := parametric.push (← verifyOne e.spec)
+      | none =>
+        match ← findFixedRuntimeEntry n with
+        | some e => fixed := fixed.push (← verifyFixedOne e.spec)
+        | none => throw (.userError s!"unregistered benchmark: {n}")
+    return { parametric, fixed }
 
 end LeanBench

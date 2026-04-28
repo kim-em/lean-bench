@@ -75,52 +75,111 @@ def configOverrideFromParsed (p : Cli.Parsed) : ConfigOverride :=
     verdictWarmupFraction? := parsedFlag? p "warmup-fraction" Float
     slopeTolerance?        := parsedFlag? p "slope-tolerance" Float }
 
+/-- Build a `FixedConfigOverride` from override flags. Only fields
+that share a flag namespace with parametric (`max-seconds-per-call`)
+plus the fixed-only `repeats` flag. Other parametric flags
+(param-ceiling, slope-tolerance) are ignored; that's deliberate
+since they have no meaning for a fixed benchmark. -/
+def fixedConfigOverrideFromParsed (p : Cli.Parsed) : FixedConfigOverride :=
+  { repeats?           := parsedFlag? p "repeats" Nat
+    maxSecondsPerCall? := parsedFlag? p "max-seconds-per-call" Float }
+
 /-! ## Subcommand handlers (parent side) -/
 
 def runListCmd (_ : Cli.Parsed) : IO UInt32 := do
-  let entries ← allRuntimeEntries
-  if entries.isEmpty then
+  let pEntries ← allRuntimeEntries
+  let fEntries ← allFixedRuntimeEntries
+  if pEntries.isEmpty && fEntries.isEmpty then
     IO.println "(no benchmarks registered)"
     return 0
   IO.println "registered benchmarks:"
-  for e in entries do
+  for e in pEntries do
     IO.println (Format.fmtSpec e.spec)
+  for e in fEntries do
+    IO.println (Format.fmtFixedSpec e.spec)
   return 0
 
+/-- Dispatch `run NAME` by registration kind. Parametric registry
+    is queried first; if not found, the fixed registry; otherwise
+    a user-facing error. -/
 def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   let nameStr := (p.positionalArg! "name").as! String
-  let result ← LeanBench.runBenchmark nameStr.toName
-                  (configOverrideFromParsed p)
-  IO.println (Format.fmtResult result)
-  return 0
+  let name := nameStr.toName
+  match ← findRuntimeEntry name with
+  | some _ =>
+    let result ← LeanBench.runBenchmark name (configOverrideFromParsed p)
+    IO.println (Format.fmtResult result)
+    return 0
+  | none =>
+    match ← findFixedRuntimeEntry name with
+    | some _ =>
+      let result ← LeanBench.runFixedBenchmark name
+                      (fixedConfigOverrideFromParsed p)
+      IO.println (Format.fmtFixedResult result)
+      return 0
+    | none =>
+      IO.eprintln s!"run: unregistered benchmark: {name}"
+      return 1
 
+/-- Dispatch `compare A B …` by registration kind. All listed names
+    must be the same kind (all parametric or all fixed); mixing is
+    rejected with a user-facing error. -/
 def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   let names := p.variableArgsAs! String |>.toList
   if names.isEmpty then
     IO.eprintln "compare: need at least two benchmark names"
     return 1
-  let report ← LeanBench.compare (names.map String.toName)
-                  (configOverrideFromParsed p)
-  IO.println (Format.fmtComparison report)
-  return 0
+  let resolved := names.map String.toName
+  let mut allParametric := true
+  let mut allFixed := true
+  for n in resolved do
+    let isP := (← findRuntimeEntry n).isSome
+    let isF := (← findFixedRuntimeEntry n).isSome
+    unless isP do allParametric := false
+    unless isF do allFixed := false
+  if allParametric then
+    let report ← LeanBench.compare resolved (configOverrideFromParsed p)
+    IO.println (Format.fmtComparison report)
+    return 0
+  if allFixed then
+    let report ← LeanBench.compareFixed resolved
+                    (fixedConfigOverrideFromParsed p)
+    IO.println (Format.fmtFixedComparison report)
+    return 0
+  IO.eprintln "compare: cannot mix parametric and fixed benchmarks; or one or more names are unregistered"
+  return 1
 
 def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
-  let names := p.variableArgsAs! String |>.toList |>.map Lean.Name.mkSimple
+  -- Use `String.toName` so qualified names like `My.Bench.foo` resolve.
+  -- `Lean.Name.mkSimple` would package the whole dotted string into one
+  -- atomic name, which never matches anything in the registry.
+  let names := p.variableArgsAs! String |>.toList |>.map String.toName
   match ← (LeanBench.verify names |>.toBaseIO) with
   | .error e =>
     IO.eprintln s!"verify: {e.toString}"
     return (1 : UInt32)
   | .ok reports =>
-    IO.println (Format.fmtVerify reports)
-    return if reports.all (·.passed) then (0 : UInt32) else (1 : UInt32)
+    IO.println (Format.fmtCombinedVerify reports)
+    return if reports.passed then (0 : UInt32) else (1 : UInt32)
 
 /-! ## Subcommand handler (child side) -/
 
 def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
   let benchStr := (p.flag! "bench").as! String
-  let param := (p.flag! "param").as! Nat
-  let targetNanos := (p.flag! "target-nanos").as! Nat
-  LeanBench.runChildMode benchStr.toName param targetNanos
+  -- The `--fixed` flag is a discriminator: when present the child
+  -- runs a fixed-benchmark single invocation and reads
+  -- `--repeat-index`; otherwise it's the existing parametric path
+  -- and reads `--param` / `--target-nanos`.
+  if p.hasFlag "fixed" then
+    let repeatIdx : Nat :=
+      match parsedFlag? p "repeat-index" Nat with
+      | some n => n
+      | none   => 0
+    LeanBench.runFixedChildMode benchStr.toName repeatIdx
+  else
+    let param := (p.flag! "param").as! Nat
+    let targetNanos := (p.flag! "target-nanos").as! Nat
+    LeanBench.runChildMode benchStr.toName param targetNanos
 
 /-! ## Cmd tree definitions -/
 
@@ -133,16 +192,22 @@ def runSub : Cmd := `[Cli|
   run VIA runRunCmd; ["0.1.0"]
   "Run a single registered benchmark; print the result table.
 
-Override the benchmark's declared `BenchmarkConfig` per-run with the
-flags below. Each missing flag leaves the declared value untouched."
+Dispatches by registration kind (parametric vs fixed). Override flags
+that don't apply to the dispatched kind are silently ignored, so
+`--repeats` on a parametric benchmark and `--slope-tolerance` on a
+fixed benchmark are both no-ops.
+
+Override the benchmark's declared config per-run with the flags below.
+Each missing flag leaves the declared value untouched."
 
   FLAGS:
-    "max-seconds-per-call" : Float;  "Hard wallclock cap per batch (seconds; e.g. 0.5; JSON-style numbers)."
-    "target-inner-nanos" : Nat;      "Auto-tune target wall-time per batch (nanoseconds)."
-    "param-floor" : Nat;             "Lowest param the doubling ladder starts from."
-    "param-ceiling" : Nat;           "Highest param the doubling ladder reaches before stopping."
-    "warmup-fraction" : Float;       "Fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
-    "slope-tolerance" : Float;       "Verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
+    "max-seconds-per-call" : Float;  "Hard wallclock cap per batch / per call (seconds; e.g. 0.5; JSON-style numbers)."
+    "target-inner-nanos" : Nat;      "Parametric only: auto-tune target wall-time per batch (nanoseconds)."
+    "param-floor" : Nat;             "Parametric only: lowest param the doubling ladder starts from."
+    "param-ceiling" : Nat;           "Parametric only: highest param the doubling ladder reaches before stopping."
+    "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
+    "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
+    "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:
     name : String;     "Benchmark name (lowercase, as registered)."
@@ -154,24 +219,28 @@ def childSub : Cmd := `[Cli|
 
   FLAGS:
     bench : String;        "Benchmark name to dispatch."
-    param : Nat;           "Parameter value to invoke the function with."
-    "target-nanos" : Nat;  "Inner-tuning target wall-time (ns)."
+    param : Nat;           "Parametric: parameter value to invoke the function with."
+    "target-nanos" : Nat;  "Parametric: inner-tuning target wall-time (ns)."
+    fixed;                 "Fixed: dispatch the fixed-benchmark single-invocation runner instead of the parametric autotuner."
+    "repeat-index" : Nat;  "Fixed: 0-based repeat index to record on the emitted JSONL row."
 ]
 
 def compareSub : Cmd := `[Cli|
   compare VIA runCompareCmd; ["0.1.0"]
   "Compare multiple registered benchmarks side-by-side.
 
-Same per-run override flags as `run`; they apply to every benchmark in
-the comparison."
+All listed benchmarks must be the same kind (parametric or fixed);
+mixing is rejected. Same per-run override flags as `run`; they apply
+to every benchmark in the comparison."
 
   FLAGS:
-    "max-seconds-per-call" : Float;  "Hard wallclock cap per batch (seconds; e.g. 0.5; JSON-style numbers)."
-    "target-inner-nanos" : Nat;      "Auto-tune target wall-time per batch (nanoseconds)."
-    "param-floor" : Nat;             "Lowest param the doubling ladder starts from."
-    "param-ceiling" : Nat;           "Highest param the doubling ladder reaches before stopping."
-    "warmup-fraction" : Float;       "Fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
-    "slope-tolerance" : Float;       "Verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
+    "max-seconds-per-call" : Float;  "Hard wallclock cap per batch / per call (seconds; e.g. 0.5; JSON-style numbers)."
+    "target-inner-nanos" : Nat;      "Parametric only: auto-tune target wall-time per batch (nanoseconds)."
+    "param-floor" : Nat;             "Parametric only: lowest param the doubling ladder starts from."
+    "param-ceiling" : Nat;           "Parametric only: highest param the doubling ladder reaches before stopping."
+    "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
+    "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
+    "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:
     ...names : String;     "Two or more benchmark names (variadic)."

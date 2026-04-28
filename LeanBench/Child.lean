@@ -152,4 +152,55 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat) : IO UInt32 :
       emitRow benchName param 0 0 none (.error msg) (some msg)
       return (1 : UInt32)
 
+/-! ## Fixed-benchmark child mode
+
+A fixed-benchmark child runs the registered value once, measures
+wall time, hashes the result, and emits one JSONL row tagged with
+`kind:"fixed"`. The parent invokes one child per measured repeat
+(plus one warmup), so the existing kill-on-cap / per-spawn
+isolation machinery applies unchanged. -/
+
+/-- Render one fixed-benchmark JSONL row. The schema overlaps the
+    parametric row but adds `kind:"fixed"` and a `repeat_index`
+    field; `param` / `inner_repeats` are absent because they're
+    meaningless for a fixed benchmark. -/
+def emitFixedRow
+    (function : Lean.Name) (repeatIndex totalNanos : Nat)
+    (resultHash : Option UInt64) (status : Status)
+    (errorMsg? : Option String := none) :
+    IO Unit := do
+  let row :=
+    "{" ++ String.intercalate "," [
+      "\"schema_version\":1",
+      "\"kind\":\"fixed\"",
+      s!"\"function\":{jsonStr function.toString}",
+      s!"\"repeat_index\":{repeatIndex}",
+      s!"\"total_nanos\":{totalNanos}",
+      s!"\"result_hash\":{jsonOptHash resultHash}",
+      s!"\"status\":{jsonStr status.toJsonString}",
+      s!"\"error\":{jsonOptStr errorMsg?}"
+    ] ++ "}"
+  IO.println row
+
+/-- Top-level entry point for fixed-benchmark child runs. Looks the
+    name up in the fixed runtime registry, performs one timed
+    invocation, emits one JSONL row, exits 0 on success or 1 on
+    error. -/
+def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat) : IO UInt32 := do
+  match ← findFixedRuntimeEntry benchName with
+  | none =>
+    emitFixedRow benchName repeatIndex 0 none
+      (.error s!"unregistered fixed benchmark: {benchName}")
+      (some s!"unregistered fixed benchmark: {benchName}")
+    return 1
+  | some entry =>
+    try
+      let (total, hash) ← entry.runner
+      emitFixedRow benchName repeatIndex total hash .ok
+      return (0 : UInt32)
+    catch e =>
+      let msg := s!"runner threw: {e.toString}"
+      emitFixedRow benchName repeatIndex 0 none (.error msg) (some msg)
+      return (1 : UInt32)
+
 end LeanBench

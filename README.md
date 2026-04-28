@@ -89,6 +89,23 @@ root = "MyBenchmarks"
 Then `lake exe my_benchmarks list / run NAME / compare A B / verify …`.
 See [doc/quickstart.md](doc/quickstart.md).
 
+## Fixed-problem benchmarks
+
+For workloads with a single canonical input — "this hard problem
+takes ~1.2 s; the FLINT equivalent takes ~0.8 s" — there's a second
+registration form with no parameter sweep:
+
+```lean
+def factorXOverFTwo : Polynomial Bool := …
+setup_fixed_benchmark factorXOverFTwo
+```
+
+The runner does one warmup call followed by `repeats` measured calls
+(default 5), reports median / min / max wall time, and hash-checks
+across repeats. `run`, `compare`, `list`, and `verify` all dispatch
+by registration kind. See [doc/quickstart.md](doc/quickstart.md#fixed-problem-benchmarks)
+for the full guide.
+
 ## Status
 
 v0.1. Cross-platform: works on every platform Lean's process API

@@ -5,8 +5,10 @@ defaultTargets = [
   "LeanBenchExampleFib", "fib_benchmark_example",
   "LeanBenchExampleSort", "sort_benchmark_example",
   "binary_search_benchmark_example",
+  "fixed_benchmark_example",
   "LeanBenchTest", "roundtrip_benchmark_test", "verify_benchmark_test",
   "kill_path_benchmark_test", "config_benchmark_test",
+  "fixed_benchmark_test",
 ]
 
 [[require]]
@@ -46,6 +48,11 @@ name = "binary_search_benchmark_example"
 srcDir = "examples/BinarySearch"
 root = "LeanBenchExampleBinarySearchMain"
 
+[[lean_exe]]
+name = "fixed_benchmark_example"
+srcDir = "examples/Fixed"
+root = "LeanBenchExampleFixed"
+
 # --- tests ---
 
 [[lean_lib]]
@@ -72,3 +79,8 @@ root = "LeanBenchTestKillPath"
 name = "config_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestConfig"
+
+[[lean_exe]]
+name = "fixed_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestFixed"
