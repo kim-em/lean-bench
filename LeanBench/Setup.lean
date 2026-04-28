@@ -49,21 +49,36 @@ If `α` has a `Hashable` instance, the auto-generated `runChecked`
 emits a `UInt64` hash of the result. Otherwise it returns `none`
 after forcing the result; conformance hashing is unavailable for
 this benchmark.
+
+An optional `with prep := <ident>` clause hoists per-param setup work
+out of the inner timing loop. With `with prep := mkInput`, the
+benchmarked function must have type `σ → α` where `σ` is the return
+type of `mkInput : Nat → σ`. The macro generates a runner that calls
+`mkInput param` once per batch and feeds the result into every inner
+iteration, so only the work inside the benchmarked function gets
+timed. Use this when the input the function operates on is expensive
+to build (an array, a tree, a hashmap), but cheap to reuse.
 -/
 syntax (name := setupBenchmark) "setup_benchmark "
-  ident ident " => " term : command
+  ident ident " => " term (" with " &"prep" " := " ident)? : command
 
-/-- Look up the type of a constant; assert it is `Nat → α` and return `α`. -/
-def expectNatToAlpha (env : Environment) (declName : Name) :
-    CommandElabM Expr := do
+/-- Look up the type of a constant; return `(argTy, resTy)`. -/
+def expectFunction (env : Environment) (declName : Name) :
+    CommandElabM (Expr × Expr) := do
   let some ci := env.find? declName
     | throwError "setup_benchmark: function `{declName}` is not defined"
   let .forallE _ argTy resTy _ := ci.type
     | throwError "setup_benchmark: function `{declName}` is not a function (type: {ci.type})"
-  unless argTy.isConstOf ``Nat do
-    throwError "setup_benchmark: function `{declName}` must take a single `Nat` argument; got `{argTy}`"
   if resTy.hasLooseBVars then
     throwError "setup_benchmark: function `{declName}`'s return type depends on its argument; only non-dependent functions are supported"
+  return (argTy, resTy)
+
+/-- Look up the type of a constant; assert it is `Nat → α` and return `α`. -/
+def expectNatToAlpha (env : Environment) (declName : Name) :
+    CommandElabM Expr := do
+  let (argTy, resTy) ← expectFunction env declName
+  unless argTy.isConstOf ``Nat do
+    throwError "setup_benchmark: function `{declName}` must take a single `Nat` argument; got `{argTy}`"
   return resTy
 
 /-- True iff `Hashable α` synthesizes. -/
@@ -74,24 +89,48 @@ def hasHashable (alphaExpr : Expr) : CommandElabM Bool := do
     | some _ => return true
     | none => return false
 
+/-- Resolve a `setup_benchmark` argument identifier against the current
+namespace, falling back to the bare name. Returns the candidate even
+on failure so the eventual error message names the user-visible
+qualified form rather than the bare identifier. -/
+def resolveDecl (env : Environment) (ns : Name) (id : Ident) : Name :=
+  let bare := id.getId
+  let candidate := ns ++ bare
+  if env.contains candidate then candidate
+  else if env.contains bare then bare
+  else candidate
+
 @[command_elab setupBenchmark]
 def elabSetupBenchmark : CommandElab := fun stx => do
   match stx with
-  | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm) => do
+  | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm) =>
+    elabCore fnId argId complexityTerm none
+  | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm
+        with prep := $prepId:ident) =>
+    elabCore fnId argId complexityTerm (some prepId)
+  | _ => throwUnsupportedSyntax
+where
+  elabCore (fnId argId : Ident) (complexityTerm : Term)
+      (prepId? : Option Ident) : CommandElabM Unit := do
     let env ← getEnv
-    -- Resolve the identifier relative to the current namespace, so
-    -- `setup_benchmark goodFib …` finds `LeanBench.Examples.Fib.goodFib`
-    -- when the call lives inside that namespace. We try the
-    -- current-namespace-prefixed name first, then fall back to the
-    -- bare identifier.
-    let bare := fnId.getId
     let ns ← getCurrNamespace
-    let candidate := ns ++ bare
-    let fnName :=
-      if env.contains candidate then candidate
-      else if env.contains bare then bare
-      else candidate  -- let `expectNatToAlpha` produce the helpful error
-    let resTy ← expectNatToAlpha env fnName
+    let fnName := resolveDecl env ns fnId
+    -- Validate types, branching on whether a prep clause was given.
+    -- `resTy` is the function's return type α (used for Hashable lookup).
+    let resTy ← match prepId? with
+      | none =>
+        -- No prep: fn must be `Nat → α`.
+        expectNatToAlpha env fnName
+      | some prepStx =>
+        -- With prep: `prep : Nat → σ` and `fn : σ → α`. Check the
+        -- types line up.
+        let prepName := resolveDecl env ns prepStx
+        let σ ← expectNatToAlpha env prepName
+        let (fnArgTy, fnResTy) ← expectFunction env fnName
+        let typesMatch ← liftTermElabM <| Meta.isDefEq fnArgTy σ
+        unless typesMatch do
+          throwError "setup_benchmark: function `{fnName}` takes argument of type `{fnArgTy}`, but prep `{prepName}` returns `{σ}`"
+        pure fnResTy
     let isHashable ← hasHashable resTy
     -- Names of the auto-generated helpers.
     let cName := fnName.str "_leanBench_complexity"
@@ -105,24 +144,76 @@ def elabSetupBenchmark : CommandElab := fun stx => do
     -- in this generated def so the Lean compiler can inline the
     -- function under test directly into it (no closure indirection,
     -- no per-iteration Hashable / Option wrap on the hot path).
-    if isHashable then
-      elabCommand <| ← `(command|
-        @[inline] def $rIdent (count param : Nat) : IO (Option UInt64) := do
-          if count = 0 then return none
-          let mut last : UInt64 := 0
-          for _ in [0:count] do
-            let r := $fnId param
-            last := Hashable.hash r
-            LeanBench.blackBox last
-          return some last)
-    else
-      elabCommand <| ← `(command|
-        @[inline] def $rIdent (count param : Nat) : IO (Option UInt64) := do
-          if count = 0 then return none
-          for _ in [0:count] do
-            let r := $fnId param
-            LeanBench.blackBox (Hashable.hash (sizeOf r))
-          return none)
+    --
+    -- The runner is two-stage: it takes `param`, runs prep (if any),
+    -- forces the prep value via `blackBox (Hashable.hash s)` so its
+    -- cost stays out of the timed loop, and returns a closure
+    -- `count → IO (loopNanos × hash)`. `IO.monoNanosNow` brackets
+    -- only the inner `for` loop. The closure captures the prep
+    -- result, so prep runs once per child-process spawn, not once
+    -- per autotuner probe.
+    --
+    -- For the no-prep path, the input (`param : Nat`) is already
+    -- strict and there is nothing to force; the runner is just
+    -- `pure (fun count => …)`.
+    let mkRunner : CommandElabM (TSyntax `command) := match prepId? with
+      | none =>
+        if isHashable then
+          `(command|
+            @[inline] def $rIdent (param : Nat) :
+                IO (Nat → IO (Nat × Option UInt64)) := pure fun count => do
+              if count = 0 then return (0, none)
+              let mut last : UInt64 := 0
+              let t₀ ← IO.monoNanosNow
+              for _ in [0:count] do
+                let r := $fnId param
+                last := Hashable.hash r
+                LeanBench.blackBox last
+              let t₁ ← IO.monoNanosNow
+              return (t₁ - t₀, some last))
+        else
+          `(command|
+            @[inline] def $rIdent (param : Nat) :
+                IO (Nat → IO (Nat × Option UInt64)) := pure fun count => do
+              if count = 0 then return (0, none)
+              let t₀ ← IO.monoNanosNow
+              for _ in [0:count] do
+                let r := $fnId param
+                LeanBench.blackBox (Hashable.hash (sizeOf r))
+              let t₁ ← IO.monoNanosNow
+              return (t₁ - t₀, none))
+      | some prepId =>
+        if isHashable then
+          `(command|
+            @[inline] def $rIdent (param : Nat) :
+                IO (Nat → IO (Nat × Option UInt64)) := do
+              let s := $prepId param
+              LeanBench.blackBox (Hashable.hash s)
+              return fun count => do
+                if count = 0 then return (0, none)
+                let mut last : UInt64 := 0
+                let t₀ ← IO.monoNanosNow
+                for _ in [0:count] do
+                  let r := $fnId s
+                  last := Hashable.hash r
+                  LeanBench.blackBox last
+                let t₁ ← IO.monoNanosNow
+                return (t₁ - t₀, some last))
+        else
+          `(command|
+            @[inline] def $rIdent (param : Nat) :
+                IO (Nat → IO (Nat × Option UInt64)) := do
+              let s := $prepId param
+              LeanBench.blackBox (Hashable.hash s)
+              return fun count => do
+                if count = 0 then return (0, none)
+                let t₀ ← IO.monoNanosNow
+                for _ in [0:count] do
+                  let r := $fnId s
+                  LeanBench.blackBox (Hashable.hash (sizeOf r))
+                let t₁ ← IO.monoNanosNow
+                return (t₁ - t₀, none))
+    elabCommand (← mkRunner)
     -- (3) emit an `initialize` block that puts the runtime closure
     --     into the IO.Ref registry. We `quote` the `Name`s so the
     --     runtime registry key is a properly hierarchical `Name` —
@@ -157,6 +248,5 @@ def elabSetupBenchmark : CommandElab := fun stx => do
         hashable := isHashable
         config := {} }
     modifyEnv (addSpec · spec)
-  | _ => throwUnsupportedSyntax
 
 end LeanBench

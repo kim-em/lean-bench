@@ -54,20 +54,17 @@ the parent's 1 s `maxSecondsPerCall` cap for the default 500 ms
 target.
 
 Returns `(innerRepeats, totalNanos, lastResultHash)`. The hash is
-whatever the runner reports — present iff the function's return type
-has a `Hashable` instance. -/
+whatever the loop reports — present iff the function's return type
+has a `Hashable` instance. The loop closure does its own timing
+internally; per-param prep ran in the caller (via the runtime
+entry's `runner`), once per spawn, before this autotune even starts. -/
 partial def autoTune
-    (runner : Nat → Nat → IO (Option UInt64))
-    (param : Nat)
+    (loop : Nat → IO (Nat × Option UInt64))
     (targetNanos : Nat) :
     IO (Nat × Nat × Option UInt64) := do
   let halfTarget := targetNanos / 2
   let probeFloor := max 1 (halfTarget / 256)
-  let rec runN (n : Nat) : IO (Nat × Option UInt64) := do
-    let t₀ ← IO.monoNanosNow
-    let hash ← runner n param
-    let t₁ ← IO.monoNanosNow
-    return (t₁ - t₀, hash)
+  let runN (n : Nat) : IO (Nat × Option UInt64) := loop n
   let mut count := 1
   let (t₀, h₀) ← runN count
   let mut t := t₀
@@ -79,9 +76,6 @@ partial def autoTune
     h := h'
   if halfTarget ≤ t then
     return (count, t, h)
-  -- Scale factor is `⌈halfTarget × 1.1 / t⌉`, rounded up to the next
-  -- power of two (so `count * scale` stays a power of two), and ≥ 2
-  -- so we never re-run the same size twice.
   let scaleRaw : Nat := (halfTarget * 11 + 10 * t - 1) / (10 * t)
   let scale    : Nat := max 2 (nextPowerOfTwo scaleRaw)
   let targetCount := count * scale
@@ -143,7 +137,8 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat) : IO UInt32 :
       (some s!"unregistered benchmark: {benchName}")
     return 1
   | some entry =>
-    let (count, total, hash) ← autoTune entry.runner param targetNanos
+    let loop ← entry.runner param
+    let (count, total, hash) ← autoTune loop targetNanos
     emitRow benchName param count total hash .ok
     return 0
 
