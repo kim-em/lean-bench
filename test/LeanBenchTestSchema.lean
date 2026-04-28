@@ -196,7 +196,7 @@ def testCanonicalKeyConstants : IO UInt32 := do
   let okOptCommon :=
     Schema.optionalCommonKeys == #["kind", "result_hash", "error"]
   let okOptParametric :=
-    Schema.optionalParametricKeys == #["per_call_nanos"]
+    Schema.optionalParametricKeys == #["per_call_nanos", "cache_mode"]
   let okStatus :=
     Schema.statusStrings ==
       #["ok", "timed_out", "killed_at_cap", "error"]

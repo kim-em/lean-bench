@@ -139,7 +139,11 @@ private def rawRow (cMaybe : Option Float) (dp : DataPoint) : Row :=
 numeric value bounded to 3 decimals and every column width derived
 from the data so decimal points align. -/
 def fmtResult (r : BenchmarkResult) : String := Id.run do
-  let headerLine := s!"{r.function}    expected complexity: {r.complexityFormula}"
+  let modeTag : String :=
+    match r.config.cacheMode with
+    | .warm => "warm"
+    | .cold => "cold"
+  let headerLine := s!"{r.function}    expected complexity: {r.complexityFormula}    [{modeTag} cache]"
   let ratioMap : Std.HashMap Nat Float :=
     r.ratios.foldl (fun m (p, c) => m.insert p c) {}
   let droppedParams : Array Nat :=

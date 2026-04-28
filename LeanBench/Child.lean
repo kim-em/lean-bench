@@ -112,6 +112,7 @@ private def jsonOptHash : Option UInt64 → String
 def emitRow
     (function : Lean.Name) (param innerRepeats totalNanos : Nat)
     (resultHash : Option UInt64) (status : Status)
+    (cacheMode : CacheMode := .warm)
     (errorMsg? : Option String := none) :
     IO Unit := do
   let perCall : Float := totalNanos.toFloat / innerRepeats.toFloat
@@ -124,6 +125,7 @@ def emitRow
       s!"\"inner_repeats\":{innerRepeats}",
       s!"\"total_nanos\":{totalNanos}",
       s!"\"per_call_nanos\":{perCall}",
+      s!"\"cache_mode\":{jsonStr cacheMode.toJsonString}",
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
       s!"\"error\":{jsonOptStr errorMsg?}"
@@ -135,23 +137,52 @@ def emitRow
     Catches exceptions thrown by the runner (e.g. a panicking
     function-under-test) and emits a structured `error` row so the
     parent — and `verify` in particular — can show the failure
-    reason rather than just an exit code. -/
-def runChildMode (benchName : Lean.Name) (param targetNanos : Nat) : IO UInt32 := do
+    reason rather than just an exit code.
+
+    `cacheMode` selects between two timing strategies:
+
+    - `.warm` — the autotuner picks an inner-repeat count and runs the
+      function many times in this single child process. This is the
+      v0.1 design and what `targetNanos` is calibrated against.
+    - `.cold` — skip the autotuner; run the function exactly once with
+      `inner_repeats := 1`. The parent respawns this child for every
+      ladder rung, so every measurement starts on a cache state that
+      hasn't seen the previous rung's data. `targetNanos` is unused in
+      this path; the wallclock is whatever a single call takes.
+
+    Both modes go through the same `loop` closure (built by the
+    `setup_benchmark`-generated runner), so prep / blackBox / hashing
+    behave identically — only the iteration count and timing strategy
+    differ. -/
+def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
+    (cacheMode : CacheMode := .warm) : IO UInt32 := do
   match ← findRuntimeEntry benchName with
   | none =>
     emitRow benchName param 0 0 none
       (.error s!"unregistered benchmark: {benchName}")
-      (some s!"unregistered benchmark: {benchName}")
+      (cacheMode := cacheMode)
+      (errorMsg? := some s!"unregistered benchmark: {benchName}")
     return 1
   | some entry =>
     try
       let loop ← entry.runner param
-      let (count, total, hash) ← autoTune loop targetNanos
-      emitRow benchName param count total hash .ok
+      let (count, total, hash) ← match cacheMode with
+        | .warm => autoTune loop targetNanos
+        | .cold =>
+          -- Single, untuned invocation. The closure does its own
+          -- internal timing around the inner loop body, just like the
+          -- warm path, so spawn / startup costs are excluded by the
+          -- same mechanism. We don't pay an extra warmup probe — the
+          -- whole point of cold is "this is the first call after a
+          -- fresh process".
+          let (t, h) ← loop 1
+          pure (1, t, h)
+      emitRow benchName param count total hash .ok (cacheMode := cacheMode)
       return (0 : UInt32)
     catch e =>
       let msg := s!"runner threw: {e.toString}"
-      emitRow benchName param 0 0 none (.error msg) (some msg)
+      emitRow benchName param 0 0 none (.error msg)
+        (cacheMode := cacheMode) (errorMsg? := some msg)
       return (1 : UInt32)
 
 /-! ## Fixed-benchmark child mode

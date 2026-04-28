@@ -30,19 +30,20 @@ runtime looks fine.
 Acceptance: a benchmark whose function allocates a list proportional
 to `n` shows `allocBytes` growing approximately linearly.
 
-## F4. Cold vs warm cache
+## F4. Cold vs warm cache (shipped — issue #12)
 
-Config flag `coldCache : Bool := false`. When true, the parent
-respawns the child for every individual measurement (no inner
-repeats). When false (default), inner repeats happen as today.
-
-Plugs into the existing `BenchmarkConfig` / `ConfigOverride` plumbing
-shipped in #5: a new field with a sensible default, exposed via
-`setup_benchmark … where { coldCache := true }` and a matching
-`--cold-cache` CLI flag.
-
-Acceptance: a benchmark with non-trivial memory layout shows distinct
-per-call times in cold vs warm mode.
+Implemented as a `cacheMode : CacheMode` config field (`.warm` /
+`.cold`, default `.warm`) exposed via
+`setup_benchmark … where { cacheMode := .cold }` at declaration time
+and `--cache-mode warm|cold` on `run` / `compare` at run time. Cold
+mode skips the in-child auto-tuner: the child runs the function
+exactly once per spawn (`inner_repeats := 1`) and the parent
+respawns the child for every ladder rung, so cache state is not
+preserved across measurements. The emitted JSONL row carries
+`cache_mode: "warm" | "cold"` and the result table tags each block
+with `[warm cache]` / `[cold cache]`. See
+[`doc/advanced.md#cache-modes`](doc/advanced.md#cache-modes) for the
+"what is being measured?" framing.
 
 ## F5. Baseline-diff
 

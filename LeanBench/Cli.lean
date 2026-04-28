@@ -69,6 +69,16 @@ instance : Cli.ParseableType LeanBench.ParamSchedule where
     | "linear"   => some .linear
     | _          => none
 
+/-- A `CacheMode` `ParseableType` for `Cli`. Recognises `warm` and
+`cold`; case-insensitive so `--cache-mode COLD` works. -/
+instance : Cli.ParseableType LeanBench.CacheMode where
+  name := "CacheMode"
+  parse? s :=
+    match s.toLower with
+    | "warm" => some .warm
+    | "cold" => some .cold
+    | _      => none
+
 namespace Cli
 
 /-- Read a flag's typed value from a `Cli.Parsed` if it was passed.
@@ -90,7 +100,8 @@ def configOverrideFromParsed (p : Cli.Parsed) : ConfigOverride :=
     paramFloor?            := parsedFlag? p "param-floor" Nat
     verdictWarmupFraction? := parsedFlag? p "warmup-fraction" Float
     slopeTolerance?        := parsedFlag? p "slope-tolerance" Float
-    paramSchedule?         := parsedFlag? p "param-schedule" LeanBench.ParamSchedule }
+    paramSchedule?         := parsedFlag? p "param-schedule" LeanBench.ParamSchedule
+    cacheMode?             := parsedFlag? p "cache-mode" LeanBench.CacheMode }
 
 /-- Build a `FixedConfigOverride` from override flags. Only fields
 that share a flag namespace with parametric (`max-seconds-per-call`)
@@ -196,7 +207,9 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
   else
     let param := (p.flag! "param").as! Nat
     let targetNanos := (p.flag! "target-nanos").as! Nat
-    LeanBench.runChildMode benchStr.toName param targetNanos
+    let cacheMode : CacheMode :=
+      (parsedFlag? p "cache-mode" LeanBench.CacheMode).getD .warm
+    LeanBench.runChildMode benchStr.toName param targetNanos cacheMode
 
 /-! ## Cmd tree definitions -/
 
@@ -225,6 +238,7 @@ Each missing flag leaves the declared value untouched."
     "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
+    "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:
@@ -239,6 +253,8 @@ def childSub : Cmd := `[Cli|
     bench : String;        "Benchmark name to dispatch."
     param : Nat;           "Parametric: parameter value to invoke the function with."
     "target-nanos" : Nat;  "Parametric: inner-tuning target wall-time (ns)."
+    "cache-mode" : LeanBench.CacheMode;
+                           "Parametric: warm (default — auto-tune inside this child) or cold (single untuned invocation; parent respawns per rung)."
     fixed;                 "Fixed: dispatch the fixed-benchmark single-invocation runner instead of the parametric autotuner."
     "repeat-index" : Nat;  "Fixed: 0-based repeat index to record on the emitted JSONL row."
 ]
@@ -259,6 +275,7 @@ to every benchmark in the comparison."
     "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
+    "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:

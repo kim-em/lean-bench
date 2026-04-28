@@ -104,6 +104,59 @@ chronically noisier hardware.
 Together they're enough to tell "off by a polynomial factor" from
 "off by a constant factor but drifting" from "just noisy".
 
+## Cache modes
+
+`--cache-mode warm` (the default) and `--cache-mode cold` measure
+different things, and the right choice depends on what you're
+investigating. The result table tags every run with `[warm cache]` or
+`[cold cache]` and the JSONL row carries the same discriminator as
+`cache_mode: "warm" | "cold"` so post-hoc analysis can keep them
+apart.
+
+**Warm mode** is the v0.1 design. The child runs an auto-tuned
+inner-repeat loop in a single subprocess: `inner_repeats` is picked
+to land just past `targetInnerNanos / 2` of inner work. CPU caches,
+branch predictors, the runtime's adaptive code paths, and the GC's
+live set all reach steady state across the repeats. The reported
+per-call time is `total_nanos / inner_repeats` — the asymptotic cost
+of the algorithm under hot microarchitectural state. This is what
+you want when you're measuring the algorithm itself: tightening a
+hot loop, comparing two implementations, or fitting a complexity
+model.
+
+**Cold mode** respawns the child for every rung of the ladder and
+runs the function exactly once per spawn (`inner_repeats := 1`,
+`auto-tune` skipped). Each measurement starts on a process whose
+caches have not seen the previous rung's data; whatever the runtime
+amortises in the warm path you pay in full here. The reported
+per-call time includes cache refill, branch predictor warmup,
+allocator first-touch, and any per-call setup that the warm loop's
+auto-tuner would otherwise hide. This is what you want when you're
+investigating locality (does the working set fit in L1/L2?),
+first-touch costs (is page-fault overhead dominating?), or whether
+the warm steady-state numbers under-report what a real workload
+will see.
+
+The trade-off: cold measurements are noisier per data point. With
+`inner_repeats := 1`, the per-spawn floor and OS jitter both fall on
+a single sample — there is no internal averaging. The verdict's
+slope and `cMin/cMax` checks still work, but expect a wider tolerance
+band and a higher chance of the verdict landing on `inconclusive`
+purely from noise. If you're interpreting cold numbers as algorithm
+data rather than locality data, raise `--max-seconds-per-call` so
+the larger rungs run long enough to dwarf the per-spawn floor.
+
+Either mode can be pinned at declaration time
+(`where { cacheMode := .warm }` / `.cold`) or selected per-run via
+the CLI (`--cache-mode warm|cold` on `run` / `compare`). The CLI
+override layers on top of the declared mode, like every other
+config knob.
+
+When in doubt, run both: `lake exe bench run myFn --cache-mode warm`
+gives the steady-state cost; `lake exe bench run myFn --cache-mode cold`
+exposes the cold-state cost. The gap between the two is the warm-up
+budget your real workload either can or cannot afford to amortise.
+
 ## The per-spawn floor
 
 Every result includes

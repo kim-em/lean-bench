@@ -147,11 +147,16 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   let target := spec.config.targetInnerNanos
   let deadlineMs : UInt32 :=
     (spec.config.maxSecondsPerCall * 1000.0 + spec.config.killGraceMs.toFloat).toUInt32
+  -- The cache-mode flag is passed positionally (`--cache-mode warm` /
+  -- `cold`) so the child knows which timing strategy to use. The
+  -- existing `--target-nanos` is unused in cold mode but still passed
+  -- for parser symmetry.
   let args : Array String := #[
     "_child",
     "--bench", spec.name.toString (escape := false),
     "--param", toString param,
-    "--target-nanos", toString target
+    "--target-nanos", toString target,
+    "--cache-mode", spec.config.cacheMode.toJsonString
   ]
   let child ← IO.Process.spawn {
     cmd := exe
