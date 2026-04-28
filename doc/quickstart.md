@@ -147,14 +147,27 @@ $ lake exe bench compare goodFib badFib --warmup-fraction 0.3 --slope-tolerance 
 
 Available flags:
 
-| Flag                     | Type   | `BenchmarkConfig` field   |
-|--------------------------|--------|---------------------------|
-| `--max-seconds-per-call` | Float  | `maxSecondsPerCall`       |
-| `--target-inner-nanos`   | Nat    | `targetInnerNanos`        |
-| `--param-floor`          | Nat    | `paramFloor`              |
-| `--param-ceiling`        | Nat    | `paramCeiling`            |
-| `--warmup-fraction`      | Float  | `verdictWarmupFraction`   |
-| `--slope-tolerance`      | Float  | `slopeTolerance`          |
+| Flag                     | Type           | `BenchmarkConfig` field   |
+|--------------------------|----------------|---------------------------|
+| `--max-seconds-per-call` | Float          | `maxSecondsPerCall`       |
+| `--target-inner-nanos`   | Nat            | `targetInnerNanos`        |
+| `--param-floor`          | Nat            | `paramFloor`              |
+| `--param-ceiling`        | Nat            | `paramCeiling`            |
+| `--warmup-fraction`      | Float          | `verdictWarmupFraction`   |
+| `--slope-tolerance`      | Float          | `slopeTolerance`          |
+| `--param-schedule`       | ParamSchedule  | `paramSchedule`           |
+
+`--param-schedule` accepts `auto` (default — pick from declared
+complexity), `doubling`, or `linear`. Use `--param-schedule linear`
+to force the linear ladder on a benchmark whose declared model
+fooled the auto-detect heuristic, or `--param-schedule doubling` to
+force a wider log-x sweep. Pin a non-default sample count for
+`linear` at declaration time via
+`where { paramSchedule := .linear 32 }`. There is no CLI flag for
+the sample count: `--param-schedule linear` on a benchmark already
+declared with `.linear 32` keeps the declared `32`, since the flag
+only carries the schedule kind. Switching from `.auto` / `.doubling`
+to `.linear` via the CLI uses the macro-default 16 samples.
 
 `--warmup-fraction F` drops the leading `F` × ratios.size data points
 from the verdict reduction (the cold regime where per-call overhead

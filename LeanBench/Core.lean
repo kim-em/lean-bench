@@ -153,8 +153,10 @@ Built by the CLI from flags such as `--max-seconds-per-call 0.5
 --param-ceiling 1024 --warmup-fraction 0.3`. Kept as a separate type
 so the macro-time defaults stay independent of CLI plumbing and so
 adding a new override knob is a one-field change. The set of fields
-here is intentionally narrower than `BenchmarkConfig` — schedule and
-noise-floor knobs stay declaration-time-only via `where { ... }`. -/
+here is intentionally narrower than `BenchmarkConfig` — the
+noise-floor knob stays declaration-time-only via `where { ... }`
+because its sensible value depends on hardware specifics rather than
+per-run intent. -/
 structure ConfigOverride where
   targetInnerNanos?      : Option Nat   := none
   maxSecondsPerCall?     : Option Float := none
@@ -163,14 +165,40 @@ structure ConfigOverride where
   verdictWarmupFraction? : Option Float := none
   slopeTolerance?        : Option Float := none
   killGraceMs?           : Option Nat   := none
+  /-- Override the ladder shape. CLI exposes this as
+      `--param-schedule auto|doubling|linear`. The `.linear` form
+      has a `samples` count that the CLI cannot express, so
+      `ConfigOverride.apply` carries the declared sample count
+      forward when both the declared and CLI shapes are `.linear`
+      — pin a non-default count via
+      `where { paramSchedule := .linear 32 }` and the CLI flag
+      becomes a no-op (the shape is already linear). When the CLI
+      switches the shape (e.g. declared `.doubling`, CLI `.linear`),
+      the macro-default sample count is used. -/
+  paramSchedule?         : Option ParamSchedule := none
   deriving Inhabited, Repr
+
+/-- Merge a CLI `paramSchedule` override on top of a declared
+schedule. `--param-schedule linear` only carries the schedule kind
+(no CLI surface for the `samples` count); when the declared config
+is already `.linear n`, preserve `n` rather than clobbering it with
+the parser's macro-default 16. Switching shape (e.g. declared
+`.doubling`, CLI `.linear`) lands on the macro default since the
+declared config has no `samples` to carry. -/
+private def mergeParamSchedule
+    (cli : Option ParamSchedule) (declared : ParamSchedule) :
+    ParamSchedule :=
+  match cli, declared with
+  | none, _ => declared
+  | some (.linear _), .linear n => .linear n
+  | some s, _ => s
 
 /-- Apply overrides on top of a config. `none` keeps the config value. -/
 def ConfigOverride.apply (o : ConfigOverride) (c : BenchmarkConfig) :
     BenchmarkConfig :=
   -- `{ c with ... }` so fields not present in `ConfigOverride`
-  -- (`narrowRangeNoiseFloor`, `paramSchedule`) are preserved from the
-  -- declared config rather than reset to structure defaults.
+  -- (`narrowRangeNoiseFloor`) are preserved from the declared
+  -- config rather than reset to structure defaults.
   { c with
     targetInnerNanos      := o.targetInnerNanos?.getD      c.targetInnerNanos
     maxSecondsPerCall     := o.maxSecondsPerCall?.getD     c.maxSecondsPerCall
@@ -178,7 +206,8 @@ def ConfigOverride.apply (o : ConfigOverride) (c : BenchmarkConfig) :
     paramFloor            := o.paramFloor?.getD            c.paramFloor
     verdictWarmupFraction := o.verdictWarmupFraction?.getD c.verdictWarmupFraction
     slopeTolerance        := o.slopeTolerance?.getD        c.slopeTolerance
-    killGraceMs           := o.killGraceMs?.getD           c.killGraceMs }
+    killGraceMs           := o.killGraceMs?.getD           c.killGraceMs
+    paramSchedule         := mergeParamSchedule o.paramSchedule? c.paramSchedule }
 
 /-- Validate a `BenchmarkConfig`. The macro accepts arbitrary user
 expressions and the CLI accepts arbitrary JSON-style numbers, so

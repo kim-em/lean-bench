@@ -144,9 +144,37 @@ branching leaking through the design.
   `targetInnerNanos := 500ms` × auto-tuned inner-repeats is enough
   signal-to-noise for the orders of magnitude we care about.
 
-- **Where-clause overrides on `setup_benchmark`.** v0.1 uses default
-  `BenchmarkConfig` for every benchmark. `where { maxSecondsPerCall
-  := 10 }` etc. is on the v0.2 list.
+## Per-benchmark configuration: `where { ... }` and CLI overrides
+
+A `BenchmarkConfig` can be tightened in two layered places:
+
+- Declaration time, via the `where { ... }` clause on
+  `setup_benchmark`. The macro elaborates the term against
+  `BenchmarkConfig` and emits an auto-generated `_leanBench_config`
+  def whose contents the runtime registry caches alongside the
+  benchmark's runner.
+- Run time, via `--max-seconds-per-call`, `--target-inner-nanos`,
+  `--param-floor`, `--param-ceiling`, `--warmup-fraction`,
+  `--slope-tolerance`, and `--param-schedule` on `run` / `compare`.
+  The CLI builds a `ConfigOverride` (each field optional) and
+  `ConfigOverride.apply` merges it on top of the declared config:
+  `none` keeps the declared value, `some` replaces it.
+
+The split is deliberate. Declaration-time defaults express what is
+true forever about a benchmark (`runInsertion` is O(n²); cap at half
+a second so the ladder doesn't pin the CPU). CLI flags express what
+is true for one run (CI tightens `--max-seconds-per-call 0.25`;
+local debugging widens `--param-ceiling`). Both feed the same
+`BenchmarkConfig`, validated by `BenchmarkConfig.validate` before
+the first child spawns.
+
+The `ConfigOverride` field set is intentionally narrower than
+`BenchmarkConfig`. `narrowRangeNoiseFloor` stays declaration-time
+only because its sensible value depends on hardware specifics, not
+per-run intent; `killGraceMs` is a SIGTERM-vs-SIGKILL implementation
+detail rather than a benchmark-shape knob. Adding a new override is a
+one-field change in `ConfigOverride` plus one `parsedFlag?` line in
+`LeanBench.Cli`.
 
 ## Failure modes and synthesized rows
 

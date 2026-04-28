@@ -59,6 +59,30 @@ jobs:
           ./.lake/build/bin/fib_benchmark_example list
           ./.lake/build/bin/fib_benchmark_example verify
 
+      # Live CLI override smoke test: `run` with declaration-time
+      # override flags must execute, honour the passed
+      # --param-ceiling, and exit cleanly. This is a real
+      # cross-platform check that the override-flag pipeline works
+      # end-to-end after a compile (the lean-side test exercises the
+      # parser; this one exercises the spawned binary). The second
+      # invocation pins `--param-schedule doubling` so the new flag
+      # is exercised end-to-end on every CI run, not just the
+      # parser-level test.
+      - name: fib example run with CLI overrides
+        shell: bash
+        run: |
+          ./.lake/build/bin/fib_benchmark_example run \
+            LeanBench.Examples.Fib.goodFib \
+            --max-seconds-per-call 0.5 \
+            --param-ceiling 1024 \
+            --slope-tolerance 0.5
+          ./.lake/build/bin/fib_benchmark_example run \
+            LeanBench.Examples.Fib.goodFib \
+            --max-seconds-per-call 0.5 \
+            --param-ceiling 256 \
+            --param-schedule doubling \
+            --slope-tolerance 0.5
+
       - name: sort example list & verify
         shell: bash
         run: |
