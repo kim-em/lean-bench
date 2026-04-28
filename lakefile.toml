@@ -9,6 +9,8 @@ defaultTargets = [
   "LeanBenchTest", "roundtrip_benchmark_test", "verify_benchmark_test",
   "kill_path_benchmark_test", "config_benchmark_test",
   "fixed_benchmark_test",
+  "child_outcome_benchmark_test", "format_benchmark_test",
+  "e2e_benchmark_test", "cli_errors_benchmark_test",
 ]
 
 [[require]]
@@ -84,3 +86,23 @@ root = "LeanBenchTestConfig"
 name = "fixed_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestFixed"
+
+[[lean_exe]]
+name = "child_outcome_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestChildOutcome"
+
+[[lean_exe]]
+name = "format_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestFormat"
+
+[[lean_exe]]
+name = "e2e_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestE2E"
+
+[[lean_exe]]
+name = "cli_errors_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestCliErrors"

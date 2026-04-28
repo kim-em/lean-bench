@@ -49,6 +49,22 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/fixed_benchmark_test
 
+      - name: child-outcome classifier test (parent failure-mode units)
+        shell: bash
+        run: ./.lake/build/bin/child_outcome_benchmark_test
+
+      - name: format regression test (pinned report layout)
+        shell: bash
+        run: ./.lake/build/bin/format_benchmark_test
+
+      - name: cli-errors test (parser + dispatch error paths)
+        shell: bash
+        run: ./.lake/build/bin/cli_errors_benchmark_test
+
+      - name: end-to-end run/compare test
+        shell: bash
+        run: ./.lake/build/bin/e2e_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's
