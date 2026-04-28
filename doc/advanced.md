@@ -102,20 +102,28 @@ times until the param grows past where startup dominates.
 
 ## CI integration
 
-A typical CI step runs the bench exe with low budget per call so the
-whole job stays bounded:
+A typical CI step runs the bench exe with a low per-call budget so
+each individual measurement is bounded:
 
 ```yaml
 - name: Benchmark sanity
+  timeout-minutes: 10
   run: |
     lake build bench
-    timeout 60 lake exe bench list                # always passes
-    timeout 120 lake exe bench run goodFib \
+    lake exe bench list
+    lake exe bench run goodFib \
       --max-seconds-per-call 0.5 --param-ceiling 1024
 ```
 
-The same flags work on `compare`, so you can pin a comparison run to
-a tight wallclock budget without recompiling. See
+`run`, `compare`, and `verify` enforce their own per-call wallclock
+cap via the in-Lean kill path, so they don't need an external
+`timeout(1)` wrapper — and the example above runs unchanged on
+Windows, which lacks GNU `timeout`. `list` and `lake build` aren't
+covered by the per-call cap (they don't run user code), so for an
+overall job-level bound use the CI system's own timeout (e.g.
+GitHub Actions' `timeout-minutes` shown above) rather than a shell
+wrapper. The same per-call flags work on `compare`, so you can pin a
+comparison run to a tight wallclock budget without recompiling. See
 [quickstart.md](quickstart.md#configuring-a-benchmark) for the full
 flag list and the matching declaration-time `where { … }` syntax.
 
