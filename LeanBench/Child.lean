@@ -1,6 +1,7 @@
 import Lean
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.RunEnv
 import LeanBench.Schema
 
 /-!
@@ -108,14 +109,35 @@ private def jsonOptHash : Option UInt64 → String
   | none => "null"
   | some h => s!"\"0x{String.ofList (Nat.toDigits 16 h.toNat)}\""
 
-/-- Render one JSONL row to stdout. -/
+/-- Render the captured `Env` as the inline `"env":{...}` field used
+on every JSONL row. We go via `Lean.Json.compress` rather than the
+hand-rolled string concatenation used elsewhere in this file so the
+nested object's escaping (CPU model strings can contain `"`) goes
+through the same escape rules `Lean.Json.parse` will use to read it
+back. -/
+private def jsonEnvFragment (env : Env) : String :=
+  s!"\"env\":{(RunEnv.toJson env).compress}"
+
+/-- Render one JSONL row to stdout. The `env` object is required
+(per the issue #11 acceptance criterion: "missing metadata is handled
+explicitly rather than silently omitted") — the child captures env
+once at entry and threads it into every emit, including synthesized
+error rows. -/
 def emitRow
     (function : Lean.Name) (param innerRepeats totalNanos : Nat)
-    (resultHash : Option UInt64) (status : Status)
+    (resultHash : Option UInt64) (status : Status) (env : Env)
     (cacheMode : CacheMode := .warm)
     (errorMsg? : Option String := none) :
     IO Unit := do
-  let perCall : Float := totalNanos.toFloat / innerRepeats.toFloat
+  -- Synthesized error / "unregistered benchmark" rows pass
+  -- `innerRepeats := 0`, which would naively render as `0/0 = NaN`.
+  -- `NaN` is not valid JSON (`Lean.Json.parse` rejects it), so we
+  -- emit `null` for the derived field and leave the consumer to
+  -- treat absence as `null` per the schema contract. Real
+  -- measurement rows always have `innerRepeats ≥ 1`.
+  let perCallStr : String :=
+    if innerRepeats == 0 then "null"
+    else toString (totalNanos.toFloat / innerRepeats.toFloat)
   let row :=
     "{" ++ String.intercalate "," [
       s!"\"schema_version\":{Schema.schemaVersion}",
@@ -124,11 +146,12 @@ def emitRow
       s!"\"param\":{param}",
       s!"\"inner_repeats\":{innerRepeats}",
       s!"\"total_nanos\":{totalNanos}",
-      s!"\"per_call_nanos\":{perCall}",
+      s!"\"per_call_nanos\":{perCallStr}",
       s!"\"cache_mode\":{jsonStr cacheMode.toJsonString}",
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
-      s!"\"error\":{jsonOptStr errorMsg?}"
+      s!"\"error\":{jsonOptStr errorMsg?}",
+      jsonEnvFragment env
     ] ++ "}"
   IO.println row
 
@@ -155,11 +178,21 @@ def emitRow
     behave identically — only the iteration count and timing strategy
     differ. -/
 def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
-    (cacheMode : CacheMode := .warm) : IO UInt32 := do
+    (cacheMode : CacheMode := .warm) (env? : Option Env := none) : IO UInt32 := do
+  -- Capture env *before* dispatching: we want a row even for the
+  -- "unregistered benchmark" failure case, and that row needs an
+  -- `env` field per the schema contract. When the parent passed
+  -- `--env-json`, we use that snapshot instead — it keeps every
+  -- row in a single run stamped with identical env (consistent
+  -- timestamps, hostname, git_dirty), and skips ~3 subprocess
+  -- spawns per ladder rung.
+  let env ← match env? with
+    | some env => pure env
+    | none     => RunEnv.capture
   match ← findRuntimeEntry benchName with
   | none =>
     emitRow benchName param 0 0 none
-      (.error s!"unregistered benchmark: {benchName}")
+      (.error s!"unregistered benchmark: {benchName}") env
       (cacheMode := cacheMode)
       (errorMsg? := some s!"unregistered benchmark: {benchName}")
     return 1
@@ -177,11 +210,11 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
           -- fresh process".
           let (t, h) ← loop 1
           pure (1, t, h)
-      emitRow benchName param count total hash .ok (cacheMode := cacheMode)
+      emitRow benchName param count total hash .ok env (cacheMode := cacheMode)
       return (0 : UInt32)
     catch e =>
       let msg := s!"runner threw: {e.toString}"
-      emitRow benchName param 0 0 none (.error msg)
+      emitRow benchName param 0 0 none (.error msg) env
         (cacheMode := cacheMode) (errorMsg? := some msg)
       return (1 : UInt32)
 
@@ -199,7 +232,7 @@ isolation machinery applies unchanged. -/
     meaningless for a fixed benchmark. -/
 def emitFixedRow
     (function : Lean.Name) (repeatIndex totalNanos : Nat)
-    (resultHash : Option UInt64) (status : Status)
+    (resultHash : Option UInt64) (status : Status) (env : Env)
     (errorMsg? : Option String := none) :
     IO Unit := do
   let row :=
@@ -211,7 +244,8 @@ def emitFixedRow
       s!"\"total_nanos\":{totalNanos}",
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
-      s!"\"error\":{jsonOptStr errorMsg?}"
+      s!"\"error\":{jsonOptStr errorMsg?}",
+      jsonEnvFragment env
     ] ++ "}"
   IO.println row
 
@@ -219,21 +253,25 @@ def emitFixedRow
     name up in the fixed runtime registry, performs one timed
     invocation, emits one JSONL row, exits 0 on success or 1 on
     error. -/
-def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat) : IO UInt32 := do
+def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat)
+    (env? : Option Env := none) : IO UInt32 := do
+  let env ← match env? with
+    | some env => pure env
+    | none     => RunEnv.capture
   match ← findFixedRuntimeEntry benchName with
   | none =>
     emitFixedRow benchName repeatIndex 0 none
-      (.error s!"unregistered fixed benchmark: {benchName}")
+      (.error s!"unregistered fixed benchmark: {benchName}") env
       (some s!"unregistered fixed benchmark: {benchName}")
     return 1
   | some entry =>
     try
       let (total, hash) ← entry.runner
-      emitFixedRow benchName repeatIndex total hash .ok
+      emitFixedRow benchName repeatIndex total hash .ok env
       return (0 : UInt32)
     catch e =>
       let msg := s!"runner threw: {e.toString}"
-      emitFixedRow benchName repeatIndex 0 none (.error msg) (some msg)
+      emitFixedRow benchName repeatIndex 0 none (.error msg) env (some msg)
       return (1 : UInt32)
 
 end LeanBench

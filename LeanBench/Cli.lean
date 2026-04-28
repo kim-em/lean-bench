@@ -195,6 +195,21 @@ def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
 
 def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
   let benchStr := (p.flag! "bench").as! String
+  -- `--env-json` is the issue #11 plumbing: when the parent has
+  -- already captured env, it serializes via this flag so the child
+  -- doesn't redo the work. Parse failures fall back to "let the
+  -- child capture fresh" rather than aborting — a malformed env
+  -- payload is a parent bug, but the run itself can still proceed.
+  let env? : Option LeanBench.Env :=
+    match parsedFlag? p "env-json" String with
+    | none => none
+    | some s =>
+      match Lean.Json.parse s with
+      | .error _ => none
+      | .ok j =>
+        match LeanBench.RunEnv.fromJson j with
+        | .ok env => some env
+        | .error _ => none
   -- The `--fixed` flag is a discriminator: when present the child
   -- runs a fixed-benchmark single invocation and reads
   -- `--repeat-index`; otherwise it's the existing parametric path
@@ -204,13 +219,13 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
       match parsedFlag? p "repeat-index" Nat with
       | some n => n
       | none   => 0
-    LeanBench.runFixedChildMode benchStr.toName repeatIdx
+    LeanBench.runFixedChildMode benchStr.toName repeatIdx env?
   else
     let param := (p.flag! "param").as! Nat
     let targetNanos := (p.flag! "target-nanos").as! Nat
     let cacheMode : CacheMode :=
       (parsedFlag? p "cache-mode" LeanBench.CacheMode).getD .warm
-    LeanBench.runChildMode benchStr.toName param targetNanos cacheMode
+    LeanBench.runChildMode benchStr.toName param targetNanos cacheMode env?
 
 /-! ## Cmd tree definitions -/
 
@@ -259,6 +274,7 @@ def childSub : Cmd := `[Cli|
                            "Parametric: warm (default — auto-tune inside this child) or cold (single untuned invocation; parent respawns per rung)."
     fixed;                 "Fixed: dispatch the fixed-benchmark single-invocation runner instead of the parametric autotuner."
     "repeat-index" : Nat;  "Fixed: 0-based repeat index to record on the emitted JSONL row."
+    "env-json" : String;   "Issue #11: parent's pre-captured env JSON, propagated so all children stamp identical env on their rows. Falls back to fresh capture when absent or malformed."
 ]
 
 def compareSub : Cmd := `[Cli|

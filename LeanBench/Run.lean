@@ -2,6 +2,7 @@ import Lean
 import Std.Sync.Mutex
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.RunEnv
 import LeanBench.Schema
 import LeanBench.Stats
 
@@ -141,8 +142,17 @@ def classifyChildOutcome
     | other =>
       synthRow param (.error (withStderr s!"child exited with code {other}"))
 
-/-- Spawn one child invocation and return the resulting DataPoint. -/
-def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
+/-- Spawn one child invocation and return the resulting DataPoint.
+
+    The `env?` argument is the parent's pre-captured environment
+    snapshot (issue #11); when `some`, it's serialized via
+    `--env-json` so the child stamps the same env on its row instead
+    of re-shelling-out to `git` / `hostname` / `/proc/cpuinfo` per
+    rung. When `none`, the child captures fresh — used by helper
+    paths (`measureSpawnFloor`, `verifyOne`) where threading env
+    through isn't worth the plumbing. -/
+def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none) :
+    IO DataPoint := do
   let exe ← ownExe
   let target := spec.config.targetInnerNanos
   let deadlineMs : UInt32 :=
@@ -151,13 +161,17 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   -- `cold`) so the child knows which timing strategy to use. The
   -- existing `--target-nanos` is unused in cold mode but still passed
   -- for parser symmetry.
-  let args : Array String := #[
+  let baseArgs : Array String := #[
     "_child",
     "--bench", spec.name.toString (escape := false),
     "--param", toString param,
     "--target-nanos", toString target,
     "--cache-mode", spec.config.cacheMode.toJsonString
   ]
+  let args : Array String :=
+    match env? with
+    | some env => baseArgs ++ #["--env-json", (RunEnv.toJson env).compress]
+    | none     => baseArgs
   let child ← IO.Process.spawn {
     cmd := exe
     args := args
@@ -315,11 +329,11 @@ private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
     `trials × maxSecondsPerCall`. Users opted into that cost when
     they bumped `outerTrials`. Issue #4. -/
 private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
-    (trials : Nat) : IO (Array DataPoint) := do
+    (trials : Nat) (env? : Option Env := none) : IO (Array DataPoint) := do
   let mut acc : Array DataPoint := #[]
   let trials := max 1 trials
   for i in [0 : trials] do
-    let dp ← runOneBatch spec param
+    let dp ← runOneBatch spec param env?
     acc := acc.push { dp with trialIndex := i }
   return acc
 
@@ -356,7 +370,7 @@ trial cluster on the rungs that count.
 
 Probe rows are returned with whatever `partOfVerdict` `runOneBatch`
 chose (defaults to true); the caller flips them as needed. -/
-private def runDoublingProbe (spec : BenchmarkSpec) :
+private def runDoublingProbe (spec : BenchmarkSpec) (env : Env) :
     IO (Array DataPoint × Option Nat × Option Nat) := do
   let ladder := paramLadder spec.config
   let mut points : Array DataPoint := #[]
@@ -365,7 +379,7 @@ private def runDoublingProbe (spec : BenchmarkSpec) :
   for param in ladder do
     if firstFail.isSome then break
     -- Probe runs one trial per rung — see the docstring rationale.
-    let rung ← runRungTrials spec param 1
+    let rung ← runRungTrials spec param 1 (some env)
     points := points ++ rung
     if rungAnyOk rung then lastOk := some param
     else firstFail := some param
@@ -383,7 +397,7 @@ private def runDoublingProbe (spec : BenchmarkSpec) :
     gets recorded — we want the user to see the flake rather than have
     it silently dropped — but it doesn't change `lastOk`/`firstFail`
     since those were settled by the probe. Issue #4. -/
-private def topUpDoublingTrials (spec : BenchmarkSpec)
+private def topUpDoublingTrials (spec : BenchmarkSpec) (env : Env)
     (probePoints : Array DataPoint) : IO (Array DataPoint) := do
   let extraTrials := spec.config.outerTrials - 1
   if extraTrials == 0 then return probePoints
@@ -397,7 +411,7 @@ private def topUpDoublingTrials (spec : BenchmarkSpec)
   let mut acc := probePoints
   for p in okParams do
     for i in [0 : extraTrials] do
-      let dp ← runOneBatch spec p
+      let dp ← runOneBatch spec p (some env)
       acc := acc.push { dp with trialIndex := i + 1 }
   return acc
 
@@ -451,7 +465,7 @@ def annotateBelowSignalFloor (multiplier : Float)
     first. With warm + tiny target the autotuner converges in a
     single iteration and the wallclock is dominated by spawn /
     process-init / IPC, which is exactly what we want to report. -/
-def measureSpawnFloor : IO (Option Nat) := do
+def measureSpawnFloor (env : Env) : IO (Option Nat) := do
   let entries ← allRuntimeEntries
   if entries.isEmpty then return none
   let entry := entries[0]!
@@ -460,7 +474,11 @@ def measureSpawnFloor : IO (Option Nat) := do
         targetInnerNanos := 1_000
         cacheMode := .warm }
   let t₀ ← IO.monoNanosNow
-  let _ ← runOneBatch { entry.spec with config := probeCfg } 0
+  -- Pass parent's env along so the probe child takes the same fast
+  -- path as a real ladder rung; otherwise the floor measurement is
+  -- inflated by the env-capture subprocesses (git / hostname /
+  -- /proc/cpuinfo) that real rungs skip.
+  let _ ← runOneBatch { entry.spec with config := probeCfg } 0 (some env)
   let t₁ ← IO.monoNanosNow
   return some (t₁ - t₀)
 
@@ -482,6 +500,13 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
+  -- Capture reproducibility metadata at *parent* run start (issue
+  -- #11). The same snapshot is propagated to every child via
+  -- `--env-json`, so all JSONL rows in this run stamp the *same*
+  -- env (timestamps, git_dirty, hostname all consistent across
+  -- rungs). Avoids ~3 subprocess spawns per ladder rung that the
+  -- child's fallback fresh-capture would do.
+  let env ← RunEnv.capture
   let spec := { entry.spec with config := cfg }
   let schedule := resolveSchedule cfg entry.complexity
   -- `.custom` skips the doubling probe entirely — we walk the
@@ -492,20 +517,20 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   match schedule with
   | .custom params =>
     for n in params do
-      let rung ← runRungTrials spec n cfg.outerTrials
+      let rung ← runRungTrials spec n cfg.outerTrials (some env)
       points := points ++ rung
       -- Stop the ladder only when EVERY trial at this rung failed.
       -- A transient first-trial timeout no longer poisons the rest
       -- of the schedule (Codex review).
       unless rungAnyOk rung do break
   | _ =>
-    let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
+    let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec env
     points := probePoints
     match schedule with
     | .doubling =>
       -- Probe rows ARE the verdict data here. Top up every successful
       -- probe rung to `outerTrials` measurements.
-      points ← topUpDoublingTrials spec points
+      points ← topUpDoublingTrials spec env points
     | .custom _ => pure ()  -- unreachable in this branch
     | .auto => pure ()  -- unreachable after resolveSchedule
     | .linear samples =>
@@ -530,7 +555,7 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
           -- don't enter `cMin`/`cMax`/slope.
           points := points.map ({ · with partOfVerdict := false })
           for n in rungs do
-            let rung ← runRungTrials spec n cfg.outerTrials
+            let rung ← runRungTrials spec n cfg.outerTrials (some env)
             points := points ++ rung
             -- Stop the sweep only when EVERY trial at this rung failed.
             unless rungAnyOk rung do break
@@ -538,14 +563,14 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
         -- No bracket (doubling ran clean to ceiling, or first rung failed).
         -- Fall back to doubling-only — top up trials so the verdict
         -- cluster is the full configured size.
-        points ← topUpDoublingTrials spec points
-  let spawnFloor ← measureSpawnFloor
+        points ← topUpDoublingTrials spec env points
+  let spawnFloor ← measureSpawnFloor env
   -- Annotate below-floor rows BEFORE summarising so the verdict
   -- ratios and the advisory list see the same filtered view.
   let annotated :=
     annotateBelowSignalFloor cfg.signalFloorMultiplier spawnFloor points
   let summary := Stats.summarize spec entry.complexity annotated
-  return { summary with spawnFloorNanos? := spawnFloor }
+  return { summary with spawnFloorNanos? := spawnFloor, env? := some env }
 
 /-! ## Fixed-benchmark orchestration -/
 
@@ -600,18 +625,25 @@ def classifyFixedChildOutcome
 
 /-- Spawn one fixed-benchmark child. `repeatIndex` is the 0-based
     index reported back in the JSONL row; `cfg` carries the kill
-    cap. Same kill-on-cap machinery as `runOneBatch`. -/
+    cap. Same kill-on-cap machinery as `runOneBatch`. The optional
+    `env?` mirrors `runOneBatch`: when `some`, the parent's snapshot
+    rides via `--env-json` and the child skips its own capture; when
+    `none`, the child captures fresh (used by `verifyFixedOne`). -/
 def runFixedOneBatch (spec : FixedSpec) (cfg : FixedBenchmarkConfig)
-    (repeatIndex : Nat) : IO FixedDataPoint := do
+    (repeatIndex : Nat) (env? : Option Env := none) : IO FixedDataPoint := do
   let exe ← ownExe
   let deadlineMs : UInt32 :=
     (cfg.maxSecondsPerCall * 1000.0 + cfg.killGraceMs.toFloat).toUInt32
-  let args : Array String := #[
+  let baseArgs : Array String := #[
     "_child",
     "--bench", spec.name.toString (escape := false),
     "--fixed",
     "--repeat-index", toString repeatIndex
   ]
+  let args : Array String :=
+    match env? with
+    | some env => baseArgs ++ #["--env-json", (RunEnv.toJson env).compress]
+    | none     => baseArgs
   let child ← IO.Process.spawn {
     cmd := exe
     args := args
@@ -691,15 +723,16 @@ def runFixedBenchmark (name : Lean.Name)
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
+  let env ← RunEnv.capture
   -- Warmup: fire-and-forget; we don't fail the run if warmup itself
   -- fails, but we do propagate killed/error status so the user sees
   -- it (recorded as repeatIndex = 0 in the warmup pass — but not
   -- pushed into `points`).
   if cfg.warmup then
-    let _ ← runFixedOneBatch entry.spec cfg 0
+    let _ ← runFixedOneBatch entry.spec cfg 0 (some env)
   let mut points : Array FixedDataPoint := #[]
   for i in [0 : cfg.repeats] do
-    let dp ← runFixedOneBatch entry.spec cfg i
+    let dp ← runFixedOneBatch entry.spec cfg i (some env)
     points := points.push dp
   let okNanos : Array Nat := points.filterMap fun dp =>
     match dp.status with
@@ -719,6 +752,7 @@ def runFixedBenchmark (name : Lean.Name)
     minNanos?
     maxNanos?
     hashesAgree
+    env? := some env
   }
 
 end LeanBench

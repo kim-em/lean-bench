@@ -1,5 +1,6 @@
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.RunEnv
 import LeanBench.Verify
 
 /-!
@@ -257,13 +258,23 @@ private def fmtTrialSummaries (r : BenchmarkResult) : Array String :=
 
 /-- Render one `BenchmarkResult` as a multi-line block with every
 numeric value bounded to 3 decimals and every column width derived
-from the data so decimal points align. -/
-def fmtResult (r : BenchmarkResult) : String := Id.run do
+from the data so decimal points align.
+
+The `includeEnv` knob controls whether the report prints a one-line
+reproducibility-metadata summary (issue #11) just under the header.
+The default is `true` for standalone `run` reports; `fmtComparison`
+flips it to `false` and prints env once at the top of the comparison
+rather than repeating it per block. -/
+def fmtResult (r : BenchmarkResult) (includeEnv : Bool := true) : String := Id.run do
   let modeTag : String :=
     match r.config.cacheMode with
     | .warm => "warm"
     | .cold => "cold"
   let headerLine := s!"{r.function}    expected complexity: {r.complexityFormula}    [{modeTag} cache]"
+  let envLine? : Option String :=
+    match r.env? with
+    | some env => if includeEnv then some s!"  env: {RunEnv.fmtConcise env}" else none
+    | none     => none
   let ratioMap : Std.HashMap Nat Float :=
     r.ratios.foldl (fun m (p, c) => m.insert p c) {}
   let droppedParams : Array Nat :=
@@ -302,7 +313,11 @@ def fmtResult (r : BenchmarkResult) : String := Id.run do
     "  " ++ perCall ++
     "  " ++ rightpad r.repeats wRep ++
     "  C=" ++ rightpad r.cStr wC ++ r.status
-  let mut lines : Array String := #[headerLine, headerRow]
+  let mut lines : Array String := #[headerLine]
+  match envLine? with
+  | some line => lines := lines.push line
+  | none      => pure ()
+  lines := lines.push headerRow
   for line in dataLines do
     lines := lines.push line
   let cMin := match r.cMin? with | some c => fmtFloat3 c | none => "—"
@@ -346,10 +361,18 @@ def fmtFixedSpec (spec : FixedSpec) : String :=
 
 /-- Render a single fixed-benchmark result as a multi-line block:
     one row per measured repeat plus a summary with median/min/max
-    and the cross-repeat hash agreement check. -/
-def fmtFixedResult (r : FixedResult) : String := Id.run do
+    and the cross-repeat hash agreement check. The `includeEnv`
+    knob mirrors the parametric `fmtResult`: standalone reports
+    print env, comparison reports suppress per-block env and print
+    once at the top. -/
+def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.run do
   let header := s!"{r.function}    [fixed] repeats={r.config.repeats}"
   let mut lines : Array String := #[header]
+  match r.env? with
+  | some env =>
+    if includeEnv then
+      lines := lines.push s!"  env: {RunEnv.fmtConcise env}"
+  | none => pure ()
   let mut idx : Nat := 0
   let nums := r.points.map fun dp =>
     match dp.status with
@@ -431,8 +454,13 @@ private def fmtHashTable
     summary. -/
 def fmtFixedComparison (rep : FixedComparisonReport) : String := Id.run do
   let mut lines : Array String := #[]
+  -- Print env once at the top of a comparison rather than repeating
+  -- it inside each per-result block.
+  match rep.results[0]?.bind (·.env?) with
+  | some env => lines := lines.push s!"env: {RunEnv.fmtConcise env}"
+  | none     => pure ()
   for r in rep.results do
-    lines := lines.push (fmtFixedResult r)
+    lines := lines.push (fmtFixedResult r (includeEnv := false))
     lines := lines.push ""
   -- Relative timing: pick the first result's median as the baseline,
   -- emit one ratio line per other result.
@@ -537,8 +565,15 @@ def fmtCombinedVerify (r : CombinedVerifyReports) : String := Id.run do
     for what to expect when only hashes are available. -/
 def fmtComparison (rep : ComparisonReport) : String := Id.run do
   let mut lines : Array String := #[]
+  -- Print env once at the top of a comparison rather than repeating
+  -- it inside each per-result block. Every result in a single
+  -- `compare` invocation shares the same parent env, so taking the
+  -- first one's snapshot is correct.
+  match rep.results[0]?.bind (·.env?) with
+  | some env => lines := lines.push s!"env: {RunEnv.fmtConcise env}"
+  | none     => pure ()
   for r in rep.results do
-    lines := lines.push (fmtResult r)
+    lines := lines.push (fmtResult r (includeEnv := false))
     lines := lines.push ""
   let common := rep.commonParams.toList.map toString
   lines := lines.push s!"common params (apples-to-apples): {String.intercalate ", " common}"
