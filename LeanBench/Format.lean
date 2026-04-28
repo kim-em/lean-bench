@@ -114,7 +114,7 @@ private def fmtRepeats (n : Nat) : String :=
     if (1 <<< k) == n then s!"×2^{k}"
     else s!"×{n}"
 
-private def rawRow (cMaybe : Option Float) (dp : DataPoint) : Row :=
+private def rawRow (cMaybe : Option Float) (totalTrials : Nat) (dp : DataPoint) : Row :=
   let (num, unit) := match dp.status with
     | .ok => fmtNanos dp.perCallNanos.toUInt64.toNat
     | _   => ("—", "")
@@ -131,9 +131,17 @@ private def rawRow (cMaybe : Option Float) (dp : DataPoint) : Row :=
   -- Below-signal-floor rows are excluded from the verdict because
   -- their per-call time is dominated by subprocess overhead — flag
   -- them so users see why `C=—` for an `ok` row. Issue #15.
-  let status :=
+  let withFloor :=
     if dp.belowSignalFloor then probeMarked ++ " [<floor]"
     else probeMarked
+  -- With `outerTrials > 1` (issue #4), the table shows multiple rows
+  -- per `param` — one per trial. Annotate each so the user can tell
+  -- raw rows apart at a glance and so the same `C=` repeated across a
+  -- cluster doesn't look like duplication.
+  let status :=
+    if totalTrials > 1 then
+      withFloor ++ s!" [trial {dp.trialIndex + 1}/{totalTrials}]"
+    else withFloor
   { param       := fmtNatUnderscores dp.param
     perCallNum  := num
     perCallUnit := unit
@@ -171,6 +179,82 @@ private def fmtAdvisory (r : BenchmarkResult) : Advisory → String
   | .tooFewVerdictRows kept =>
     s!"  ‼ only {kept} verdict-eligible row(s) survived warmup-trim + signal-floor filter; the verdict is below resolution. Lower `--warmup-fraction`, raise `--param-ceiling`, or " ++ customScheduleHint ++ "."
 
+/-- Render the per-param trial-summary block. One header line plus
+one data line per `TrialSummary`. Returns `#[]` when there is nothing
+useful to show:
+
+- `outerTrials ≤ 1`: every summary trivially has min = median = max,
+  spread = 0; printing it is noise.
+- empty `trialSummaries`: no verdict-eligible rows landed.
+
+Each data line shows the param, ok-trial count out of the configured
+trials, median per-call time, min, max, and the relative spread as a
+percentage. The point is to expose a stability number per param at a
+glance — a row with `spread=2.0%` is a tight cluster, `spread=80.0%`
+is unreliable. Issue #4. -/
+private def fmtTrialSummaries (r : BenchmarkResult) : Array String :=
+  Id.run do
+    if r.config.outerTrials ≤ 1 then return #[]
+    if r.trialSummaries.isEmpty then return #[]
+    let totalTrials := r.config.outerTrials
+    let numStrs (xs : Array Float) : Array String × Array String :=
+      let pairs := xs.map fun x =>
+        if x ≤ 0.0 then ("—", "")
+        else fmtNanos x.toUInt64.toNat
+      (pairs.map (·.1), pairs.map (·.2))
+    let medians := r.trialSummaries.map (·.medianPerCallNanos)
+    let mins    := r.trialSummaries.map (·.minPerCallNanos)
+    let maxs    := r.trialSummaries.map (·.maxPerCallNanos)
+    let (medianNums, medianUnits) := numStrs medians
+    let (minNums, minUnits)       := numStrs mins
+    let (maxNums, maxUnits)       := numStrs maxs
+    let medianAligned := alignDecimals medianNums
+    let minAligned    := alignDecimals minNums
+    let maxAligned    := alignDecimals maxNums
+    let trialsCol := r.trialSummaries.map fun s =>
+      s!"{s.okCount}/{totalTrials}"
+    let paramCol  := r.trialSummaries.map fun s =>
+      fmtNatUnderscores s.param
+    let spreadCol := r.trialSummaries.map fun s =>
+      fmtFloat3 (s.relativeSpread * 100.0) ++ "%"
+    let unitW (us : Array String) := us.foldl (fun m u => max m u.length) 0
+    let medianUnitW := unitW medianUnits
+    let minUnitW    := unitW minUnits
+    let maxUnitW    := unitW maxUnits
+    let wParam   := paramCol.foldl (fun m s => max m s.length) "param".length
+    let wTrials  := trialsCol.foldl (fun m s => max m s.length) "trials".length
+    let medianNumW := if medianAligned.isEmpty then 0 else medianAligned[0]!.length
+    let minNumW    := if minAligned.isEmpty    then 0 else minAligned[0]!.length
+    let maxNumW    := if maxAligned.isEmpty    then 0 else maxAligned[0]!.length
+    let medianColW := max "median".length (medianNumW + 1 + medianUnitW)
+    let minColW    := max "min".length    (minNumW + 1 + minUnitW)
+    let maxColW    := max "max".length    (maxNumW + 1 + maxUnitW)
+    let wSpread  := spreadCol.foldl (fun m s => max m s.length) "spread".length
+    let mut lines : Array String :=
+      #[s!"  trial summaries ({totalTrials} trials per param; spread = (max-min)/median):"]
+    lines := lines.push <|
+      "    " ++ leftpad "param" wParam ++
+      "  "  ++ rightpad "trials" wTrials ++
+      "  "  ++ rightpad "median" medianColW ++
+      "  "  ++ rightpad "min" minColW ++
+      "  "  ++ rightpad "max" maxColW ++
+      "  "  ++ rightpad "spread" wSpread
+    for i in [0 : r.trialSummaries.size] do
+      let medianCell :=
+        medianAligned[i]! ++ " " ++ rightpad medianUnits[i]! medianUnitW
+      let minCell :=
+        minAligned[i]! ++ " " ++ rightpad minUnits[i]! minUnitW
+      let maxCell :=
+        maxAligned[i]! ++ " " ++ rightpad maxUnits[i]! maxUnitW
+      lines := lines.push <|
+        "    " ++ leftpad paramCol[i]! wParam ++
+        "  "  ++ rightpad trialsCol[i]! wTrials ++
+        "  "  ++ rightpad medianCell medianColW ++
+        "  "  ++ rightpad minCell minColW ++
+        "  "  ++ rightpad maxCell maxColW ++
+        "  "  ++ rightpad spreadCol[i]! wSpread
+    return lines
+
 /-- Render one `BenchmarkResult` as a multi-line block with every
 numeric value bounded to 3 decimals and every column width derived
 from the data so decimal points align. -/
@@ -184,8 +268,9 @@ def fmtResult (r : BenchmarkResult) : String := Id.run do
     r.ratios.foldl (fun m (p, c) => m.insert p c) {}
   let droppedParams : Array Nat :=
     (r.ratios.extract 0 r.verdictDroppedLeading).map (·.1)
+  let totalTrials := r.config.outerTrials
   let raws : Array Row := r.points.map fun dp =>
-    let row := rawRow (ratioMap.get? dp.param) dp
+    let row := rawRow (ratioMap.get? dp.param) totalTrials dp
     if droppedParams.contains dp.param then
       { row with status := row.status ++ " †" }
     else row
@@ -242,6 +327,8 @@ def fmtResult (r : BenchmarkResult) : String := Id.run do
   | some n =>
     lines := lines.push s!"  per-spawn floor (harness self-measurement): {fmtNanosStr n}"
   | none => pure ()
+  for line in fmtTrialSummaries r do
+    lines := lines.push line
   for adv in r.advisories do
     lines := lines.push (fmtAdvisory r adv)
   return "\n".intercalate lines.toList

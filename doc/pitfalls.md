@@ -285,6 +285,15 @@ What this means in practice:
   measurement, no internal averaging), use `--cache-mode cold` and
   read [advanced.md#cache-modes](advanced.md#cache-modes). The two
   modes measure different things; either can be appropriate.
+- **Single-shot per param is fragile near the boundary.** The
+  default `--outer-trials 1` collects one batch per ladder rung,
+  and a single noisy spawn at the high end can flip a verdict from
+  consistent to inconclusive. Bump `--outer-trials 3` (or higher)
+  to get a per-param median + spread; the verdict then sees the
+  median per param, not a single noisy sample. See
+  [advanced.md#outer-trials](advanced.md#outer-trials) for what
+  the summary block reports and what its limits are. Cost scales
+  linearly with the trial count, so it's a deliberate trade.
 
 For exponential-complexity benchmarks, the ladder shifts from
 doubling to a linear sweep over `(lastOk, firstFail)` and the
