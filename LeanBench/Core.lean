@@ -311,6 +311,13 @@ structure BenchmarkConfig where
       with `outerTrials`. CI tunes this via `--outer-trials` to trade
       runtime for stability. Issue #4. -/
   outerTrials : Nat := 1
+  /-- User-defined tags for organizing benchmarks into groups. Tags
+      are arbitrary strings attached at declaration time via
+      `where { tags := #["sort", "fast"] }`. The CLI can filter by tag
+      (`--tag sort`) or by name substring (`--filter Sort`) on `list`,
+      `run`, `compare`, and `verify`. Tags are metadata — they don't
+      affect measurement, the verdict, or the wire format. Issue #10. -/
+  tags : Array String := #[]
   deriving Inhabited, Repr, BEq
 
 /-- Optional run-time overrides applied on top of a benchmark's
@@ -687,6 +694,9 @@ structure FixedBenchmarkConfig where
   /-- Whether to perform a single discarded warmup call before the
       measured calls. Defaults to true. -/
   warmup            : Bool  := true
+  /-- User-defined tags for organizing benchmarks. Same semantics as
+      `BenchmarkConfig.tags` — see issue #10. -/
+  tags              : Array String := #[]
   deriving Inhabited, Repr, BEq
 
 /-- Run-time overrides applied on top of a benchmark's declared

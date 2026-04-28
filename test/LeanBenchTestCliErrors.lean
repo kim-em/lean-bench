@@ -53,9 +53,17 @@ private def expectParserError (label : String) (argv : List String)
 def testUnknownSubcommand : IO UInt32 :=
   expectParserError "parser.unknownSubcommand" ["totally-not-a-command"] "totally-not-a-command"
 
-def testRunMissingName : IO UInt32 :=
-  -- `run` requires a positional `name`; with none the parser must err.
-  expectParserError "parser.runMissingName" ["run"] "name"
+/-- `run` with no names and no filters: the handler returns 1 with a
+    helpful error. (Before issue #10, `name` was a required positional
+    arg and the parser would reject; now it's variadic and the handler
+    checks.) -/
+def testRunMissingName : IO UInt32 := do
+  let code ← LeanBench.Cli.dispatch ["run"]
+  if code == 1 then
+    IO.println "  ok  dispatch.runMissingName"
+    return 0
+  IO.eprintln s!"FAIL: dispatch.runMissingName: expected exit 1, got {code}"
+  return 1
 
 def testNegativeNatRejected : IO UInt32 :=
   -- `--param-floor` is typed `Nat`; the parser must reject negatives,

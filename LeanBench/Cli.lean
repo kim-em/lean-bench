@@ -20,7 +20,7 @@ runner). Subcommand layout:
 |-----------------------------------------------------------------|------|
 | `./bench`                                                       | parent: print all registered benchmark names |
 | `./bench list`                                                  | parent: same |
-| `./bench run NAME [override flags]`                             | parent: run one benchmark, print report |
+| `./bench run NAME [override flags]`                             | parent: run one or more benchmarks, print report |
 | `./bench compare A B C [override flags]`                        | parent: comparison report |
 | `./bench verify [NAMES…]`                                        | parent: bounded `f 0` / `f 1` sanity check via children |
 | `./bench _child --bench NAME --param N --target-nanos T`        | child: one inner-tuned batch, print one JSONL row, exit |
@@ -31,6 +31,13 @@ flags (`--max-seconds-per-call`, `--target-inner-nanos`,
 `--slope-tolerance`, `--param-schedule`). Each flag corresponds 1:1
 with a `ConfigOverride` field; missing flags leave the declared
 config untouched.
+
+All parent-side subcommands accept `--tag TAG` and `--filter PATTERN`
+for selecting benchmarks by tag or name substring. Tags are declared
+via `where { tags := #["sort", "fast"] }` and matched by
+comma-separated OR logic (`--tag sort,fast` matches benchmarks with
+either tag). `--filter Sort` matches benchmarks whose name contains
+"Sort" as a substring. See `doc/quickstart.md#tags-and-filtering`.
 
 CLI parsing uses `Cli` (mhuisi/lean4-cli).
 -/
@@ -114,18 +121,88 @@ def fixedConfigOverrideFromParsed (p : Cli.Parsed) : FixedConfigOverride :=
   { repeats?           := parsedFlag? p "repeats" Nat
     maxSecondsPerCall? := parsedFlag? p "max-seconds-per-call" Float }
 
+/-! ## Benchmark filtering (issue #10)
+
+Shared filtering infrastructure for `list`, `run`, `compare`, and
+`verify`. Benchmarks can be selected by:
+
+- **Tag** (`--tag sort,fast`): matches benchmarks that have at least
+  one of the listed tags (OR logic).
+- **Name filter** (`--filter Sort`): matches benchmarks whose full
+  dotted name contains the given substring.
+- **Both** (`--tag sort --filter Insert`): both conditions must match
+  (AND logic between the two filter types).
+
+When neither `--tag` nor `--filter` is given, all benchmarks pass the
+filter (existing behavior). -/
+
+/-- True iff `haystack` contains `needle` as a substring. -/
+def containsSub (haystack needle : String) : Bool :=
+  (haystack.splitOn needle).length > 1
+
+/-- Split a comma-separated tag string into individual tags. Trims
+whitespace from each segment and filters out empty segments, so
+`--tag "sort, fast"` and `--tag sort,,fast` both produce
+`#["sort", "fast"]`. -/
+def splitTags (s : String) : Array String :=
+  (s.splitOn ",").toArray.map (·.trimAscii.toString) |>.filter (!·.isEmpty)
+
+/-- Does a single benchmark entry match the given tag and name
+filters? -/
+def matchEntry (name : Lean.Name) (entryTags : Array String)
+    (tagFilter : Array String) (nameFilter : Option String) : Bool :=
+  let tagOk := tagFilter.isEmpty || tagFilter.any entryTags.contains
+  let nameOk := match nameFilter with
+    | none => true
+    | some pat => containsSub (name.toString (escape := false)) pat
+  tagOk && nameOk
+
+/-- Parse `--tag` and `--filter` from a `Cli.Parsed`. Returns
+`(tagFilter, nameFilter)` where `tagFilter` is the split comma-
+separated tag list (empty if `--tag` was not passed) and `nameFilter`
+is the raw `--filter` string if present. -/
+private def parseFilters (p : Cli.Parsed) : Array String × Option String :=
+  let tagFilter := parsedFlag? p "tag" String |>.map splitTags |>.getD #[]
+  let nameFilter := parsedFlag? p "filter" String
+  (tagFilter, nameFilter)
+
+/-- Filter parametric runtime entries by tag/name. -/
+private def filterParametric (entries : Array RuntimeEntry)
+    (tagFilter : Array String) (nameFilter : Option String) :
+    Array RuntimeEntry :=
+  entries.filter fun e =>
+    matchEntry e.spec.name e.spec.config.tags tagFilter nameFilter
+
+/-- Filter fixed runtime entries by tag/name. -/
+private def filterFixed (entries : Array FixedRuntimeEntry)
+    (tagFilter : Array String) (nameFilter : Option String) :
+    Array FixedRuntimeEntry :=
+  entries.filter fun e =>
+    matchEntry e.spec.name e.spec.config.tags tagFilter nameFilter
+
+/-- Are any filter flags set? -/
+private def hasFilters (tagFilter : Array String) (nameFilter : Option String) :
+    Bool :=
+  !tagFilter.isEmpty || nameFilter.isSome
+
 /-! ## Subcommand handlers (parent side) -/
 
-def runListCmd (_ : Cli.Parsed) : IO UInt32 := do
+def runListCmd (p : Cli.Parsed) : IO UInt32 := do
+  let (tagFilter, nameFilter) := parseFilters p
   let pEntries ← allRuntimeEntries
   let fEntries ← allFixedRuntimeEntries
-  if pEntries.isEmpty && fEntries.isEmpty then
-    IO.println "(no benchmarks registered)"
+  let pFiltered := filterParametric pEntries tagFilter nameFilter
+  let fFiltered := filterFixed fEntries tagFilter nameFilter
+  if pFiltered.isEmpty && fFiltered.isEmpty then
+    if hasFilters tagFilter nameFilter then
+      IO.println "(no benchmarks match the given filters)"
+    else
+      IO.println "(no benchmarks registered)"
     return 0
   IO.println "registered benchmarks:"
-  for e in pEntries do
+  for e in pFiltered do
     IO.println (Format.fmtSpec e.spec)
-  for e in fEntries do
+  for e in fFiltered do
     IO.println (Format.fmtFixedSpec e.spec)
   return 0
 
@@ -159,40 +236,109 @@ private def handleBaselineAndExport
   | none => pure ()
   return exitCode
 
+/-- Dispatch `run` by explicit names and/or filters. When explicit
+    names are given, run those directly (existing behavior). When
+    only filters are given, run all matching benchmarks. Parametric
+    and fixed benchmarks can coexist in a filtered run; each is
+    dispatched to its own runner.
+
+    With both names and filters, only explicit names are run (filters
+    are selection tools for "find all matching" mode, not additional
+    constraints on named benchmarks). -/
 def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
-  let nameStr := (p.positionalArg! "name").as! String
-  let name := nameStr.toName
+  let nameStrs := p.variableArgsAs! String |>.toList
+  let (tagFilter, nameFilter) := parseFilters p
   let exportPath? := parsedFlag? p "export-file" String
   let baselinePath? := parsedFlag? p "baseline" String
   let threshold : Float :=
     (parsedFlag? p "regression-threshold" Float).getD 10.0
-  match ← findRuntimeEntry name with
-  | some _ =>
-    let result ← LeanBench.runBenchmark name (configOverrideFromParsed p)
-    IO.println (Format.fmtResult result)
-    handleBaselineAndExport #[result] #[] result.env?
+  -- Explicit names: run each directly (existing behavior).
+  if !nameStrs.isEmpty then
+    let mut anyFail := false
+    let mut pResults : Array BenchmarkResult := #[]
+    let mut fResults : Array FixedResult := #[]
+    for nameStr in nameStrs do
+      let name := nameStr.toName
+      match ← findRuntimeEntry name with
+      | some _ =>
+        let result ← LeanBench.runBenchmark name (configOverrideFromParsed p)
+        IO.println (Format.fmtResult result)
+        pResults := pResults.push result
+      | none =>
+        match ← findFixedRuntimeEntry name with
+        | some _ =>
+          let result ← LeanBench.runFixedBenchmark name
+                          (fixedConfigOverrideFromParsed p)
+          IO.println (Format.fmtFixedResult result)
+          fResults := fResults.push result
+        | none =>
+          IO.eprintln s!"run: unregistered benchmark: {name}"
+          anyFail := true
+      if nameStrs.length > 1 then
+        IO.println ""
+    if anyFail then return 1
+    let env? := pResults[0]?.bind (·.env?) |>.orElse fun _ => fResults[0]?.bind (·.env?)
+    let exportCode ← handleBaselineAndExport pResults fResults env?
       baselinePath? exportPath? threshold
-  | none =>
-    match ← findFixedRuntimeEntry name with
-    | some _ =>
-      let result ← LeanBench.runFixedBenchmark name
-                      (fixedConfigOverrideFromParsed p)
-      IO.println (Format.fmtFixedResult result)
-      handleBaselineAndExport #[] #[result] result.env?
-        baselinePath? exportPath? threshold
-    | none =>
-      IO.eprintln s!"run: unregistered benchmark: {name}"
-      return 1
+    return exportCode
+  -- No explicit names: use filters.
+  unless hasFilters tagFilter nameFilter do
+    IO.eprintln "run: specify a benchmark name or use --tag/--filter to select benchmarks"
+    return 1
+  let pEntries ← allRuntimeEntries
+  let fEntries ← allFixedRuntimeEntries
+  let pFiltered := filterParametric pEntries tagFilter nameFilter
+  let fFiltered := filterFixed fEntries tagFilter nameFilter
+  if pFiltered.isEmpty && fFiltered.isEmpty then
+    IO.eprintln "run: no benchmarks match the given filters"
+    return 1
+  let mut first := true
+  let mut pResults : Array BenchmarkResult := #[]
+  let mut fResults : Array FixedResult := #[]
+  for e in pFiltered do
+    unless first do IO.println ""
+    first := false
+    let result ← LeanBench.runBenchmark e.spec.name (configOverrideFromParsed p)
+    IO.println (Format.fmtResult result)
+    pResults := pResults.push result
+  for e in fFiltered do
+    unless first do IO.println ""
+    first := false
+    let result ← LeanBench.runFixedBenchmark e.spec.name
+                    (fixedConfigOverrideFromParsed p)
+    IO.println (Format.fmtFixedResult result)
+    fResults := fResults.push result
+  let env? := pResults[0]?.bind (·.env?) |>.orElse fun _ => fResults[0]?.bind (·.env?)
+  handleBaselineAndExport pResults fResults env?
+    baselinePath? exportPath? threshold
 
 /-- Dispatch `compare A B …` by registration kind. All listed names
     must be the same kind (all parametric or all fixed); mixing is
-    rejected with a user-facing error. -/
+    rejected with a user-facing error.
+
+    When no explicit names are given, `--tag` / `--filter` selects
+    the benchmarks to compare. The same kind constraint applies. -/
 def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
-  let names := p.variableArgsAs! String |>.toList
-  if names.isEmpty then
-    IO.eprintln "compare: need at least two benchmark names"
+  let nameStrs := p.variableArgsAs! String |>.toList
+  let (tagFilter, nameFilter) := parseFilters p
+  let resolved : List Lean.Name ←
+    if !nameStrs.isEmpty then
+      pure (nameStrs.map String.toName)
+    else if hasFilters tagFilter nameFilter then do
+      let pEntries ← allRuntimeEntries
+      let fEntries ← allFixedRuntimeEntries
+      let pFiltered := filterParametric pEntries tagFilter nameFilter
+      let fFiltered := filterFixed fEntries tagFilter nameFilter
+      let pNames := pFiltered.map (·.spec.name) |>.toList
+      let fNames := fFiltered.map (·.spec.name) |>.toList
+      pure (pNames ++ fNames)
+    else pure []
+  if resolved.isEmpty then
+    IO.eprintln "compare: need at least two benchmark names (or use --tag/--filter)"
     return 1
-  let resolved := names.map String.toName
+  if resolved.length < 2 then
+    IO.eprintln "compare: need at least two benchmarks to compare"
+    return 1
   let exportPath? : Option String := parsedFlag? p "export-file" String
   let mut allParametric := true
   let mut allFixed := true
@@ -226,10 +372,26 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   return 1
 
 def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
-  -- Use `String.toName` so qualified names like `My.Bench.foo` resolve.
-  -- `Lean.Name.mkSimple` would package the whole dotted string into one
-  -- atomic name, which never matches anything in the registry.
-  let names := p.variableArgsAs! String |>.toList |>.map String.toName
+  let nameStrs := p.variableArgsAs! String |>.toList
+  let (tagFilter, nameFilter) := parseFilters p
+  let names : List Lean.Name ←
+    if !nameStrs.isEmpty then
+      pure (nameStrs.map String.toName)
+    else if hasFilters tagFilter nameFilter then do
+      let pEntries ← allRuntimeEntries
+      let fEntries ← allFixedRuntimeEntries
+      let pFiltered := filterParametric pEntries tagFilter nameFilter
+      let fFiltered := filterFixed fEntries tagFilter nameFilter
+      let pNames := pFiltered.map (·.spec.name) |>.toList
+      let fNames := fFiltered.map (·.spec.name) |>.toList
+      pure (pNames ++ fNames)
+    else pure []
+  -- `verify []` means "all" (existing behavior). `verify --tag x`
+  -- that matches nothing still calls `verify []` which verifies all,
+  -- so check for that edge case.
+  if hasFilters tagFilter nameFilter && names.isEmpty then
+    IO.eprintln "verify: no benchmarks match the given filters"
+    return 1
   match ← (LeanBench.verify names |>.toBaseIO) with
   | .error e =>
     IO.eprintln s!"verify: {e.toString}"
@@ -242,11 +404,6 @@ def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
 
 def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
   let benchStr := (p.flag! "bench").as! String
-  -- `--env-json` is the issue #11 plumbing: when the parent has
-  -- already captured env, it serializes via this flag so the child
-  -- doesn't redo the work. Parse failures fall back to "let the
-  -- child capture fresh" rather than aborting — a malformed env
-  -- payload is a parent bug, but the run itself can still proceed.
   let env? : Option LeanBench.Env :=
     match parsedFlag? p "env-json" String with
     | none => none
@@ -257,10 +414,6 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
         match LeanBench.RunEnv.fromJson j with
         | .ok env => some env
         | .error _ => none
-  -- The `--fixed` flag is a discriminator: when present the child
-  -- runs a fixed-benchmark single invocation and reads
-  -- `--repeat-index`; otherwise it's the existing parametric path
-  -- and reads `--param` / `--target-nanos`.
   if p.hasFlag "fixed" then
     let repeatIdx : Nat :=
       match parsedFlag? p "repeat-index" Nat with
@@ -278,12 +431,19 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
 
 def listSub : Cmd := `[Cli|
   list VIA runListCmd; ["0.1.0"]
-  "List registered benchmarks."
+  "List registered benchmarks. Use --tag/--filter to narrow the output."
+
+  FLAGS:
+    tag : String;      "Filter by tag (comma-separated for multiple; OR logic). Example: --tag sort,fast"
+    filter : String;   "Filter by name substring. Example: --filter Sort"
 ]
 
 def runSub : Cmd := `[Cli|
   run VIA runRunCmd; ["0.1.0"]
-  "Run a single registered benchmark; print the result table.
+  "Run registered benchmarks; print the result table.
+
+Accepts explicit benchmark names as positional arguments, or use
+--tag/--filter to select benchmarks by metadata.
 
 Dispatches by registration kind (parametric vs fixed). Override flags
 that don't apply to the dispatched kind are silently ignored, so
@@ -294,6 +454,8 @@ Override the benchmark's declared config per-run with the flags below.
 Each missing flag leaves the declared value untouched."
 
   FLAGS:
+    tag : String;      "Filter by tag (comma-separated for multiple; OR logic). Example: --tag sort,fast"
+    filter : String;   "Filter by name substring. Example: --filter Sort"
     "max-seconds-per-call" : Float;  "Hard wallclock cap per batch / per call (seconds; e.g. 0.5; JSON-style numbers)."
     "target-inner-nanos" : Nat;      "Parametric only: auto-tune target wall-time per batch (nanoseconds)."
     "param-floor" : Nat;             "Parametric only: lowest param the doubling ladder starts from."
@@ -309,7 +471,7 @@ Each missing flag leaves the declared value untouched."
     "regression-threshold" : Float;  "Percentage threshold for flagging regressions (default 10.0; e.g. 10 means >10% slower is a regression)."
 
   ARGS:
-    name : String;     "Benchmark name (lowercase, as registered)."
+    ...names : String;     "Benchmark name(s). If omitted, use --tag/--filter to select."
 ]
 
 def childSub : Cmd := `[Cli|
@@ -333,9 +495,15 @@ def compareSub : Cmd := `[Cli|
 
 All listed benchmarks must be the same kind (parametric or fixed);
 mixing is rejected. Same per-run override flags as `run`; they apply
-to every benchmark in the comparison."
+to every benchmark in the comparison.
+
+Use --tag/--filter instead of explicit names to select benchmarks by
+metadata. When both explicit names and filters are given, only the
+explicit names are used."
 
   FLAGS:
+    tag : String;      "Filter by tag (comma-separated for multiple; OR logic). Example: --tag sort,fast"
+    filter : String;   "Filter by name substring. Example: --filter Sort"
     "max-seconds-per-call" : Float;  "Hard wallclock cap per batch / per call (seconds; e.g. 0.5; JSON-style numbers)."
     "target-inner-nanos" : Nat;      "Parametric only: auto-tune target wall-time per batch (nanoseconds)."
     "param-floor" : Nat;             "Parametric only: lowest param the doubling ladder starts from."
@@ -349,12 +517,16 @@ to every benchmark in the comparison."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
 
   ARGS:
-    ...names : String;     "Two or more benchmark names (variadic)."
+    ...names : String;     "Two or more benchmark names (variadic). Or use --tag/--filter to select."
 ]
 
 def verifySub : Cmd := `[Cli|
   verify VIA runVerifyCmd; ["0.1.0"]
-  "Sanity-check registered benchmarks (f 0, f 1 via the child path). Verifies all benchmarks if no names are given. Exit code is non-zero on any failure."
+  "Sanity-check registered benchmarks (f 0, f 1 via the child path). Verifies all benchmarks if no names or filters are given. Exit code is non-zero on any failure."
+
+  FLAGS:
+    tag : String;      "Filter by tag (comma-separated for multiple; OR logic). Example: --tag sort,fast"
+    filter : String;   "Filter by name substring. Example: --filter Sort"
 
   ARGS:
     ...names : String;     "Optional: benchmark names to verify; verify all if omitted."

@@ -114,6 +114,101 @@ Pick whichever expression best models the algorithm:
 `Nat.log2` is in core Lean. The `+ 1` in the `n log n` row guards
 against `log2 0 = 0` producing a zero denominator in the ratio.
 
+## Tags and filtering
+
+As your benchmark suite grows, organizing benchmarks into groups makes
+it easier to run subsets, compare families, and keep `list` output
+readable.
+
+### Tagging benchmarks
+
+Add `tags` in the `where { … }` block:
+
+```lean
+setup_benchmark runInsertion n => n * n where {
+  tags := #["sort", "quadratic"]
+  maxSecondsPerCall := 0.5
+}
+setup_benchmark runMergeSort n => n * Nat.log2 (n + 1) where {
+  tags := #["sort"]
+}
+setup_benchmark goodFib n => n where {
+  tags := #["fib"]
+}
+```
+
+Tags are arbitrary strings. A benchmark can have zero or more tags.
+Benchmarks without tags work exactly as before — the feature is fully
+opt-in.
+
+Fixed benchmarks support tags too:
+
+```lean
+setup_fixed_benchmark heavyComputation where {
+  tags := #["regression"]
+  repeats := 10
+}
+```
+
+### Filtering by tag or name
+
+All parent-side subcommands (`list`, `run`, `compare`, `verify`)
+accept `--tag` and `--filter` flags:
+
+| Flag | Semantics |
+|------|-----------|
+| `--tag sort` | Benchmarks with the `sort` tag |
+| `--tag sort,fib` | Benchmarks with `sort` OR `fib` (OR logic) |
+| `--filter Sort` | Benchmarks whose name contains `Sort` |
+| `--tag sort --filter Insert` | Both conditions must match (AND) |
+
+Examples:
+
+```bash
+# List only sorting benchmarks
+$ lake exe bench list --tag sort
+
+# Run all benchmarks tagged "fib"
+$ lake exe bench run --tag fib
+
+# Compare all sorting benchmarks
+$ lake exe bench compare --tag sort
+
+# Verify benchmarks whose name contains "Sort"
+$ lake exe bench verify --filter Sort
+```
+
+When no `--tag` or `--filter` is given, all benchmarks are included
+(existing behavior). Name filtering matches anywhere in the fully
+qualified dotted name, so `--filter Sort` matches
+`MyProject.Sort.runMergeSort`.
+
+### Using namespaces as organization
+
+Lean namespaces naturally provide hierarchical grouping. Combined with
+`--filter`, this gives you namespace-based filtering for free:
+
+```lean
+namespace Sort
+  setup_benchmark runInsertion n => n * n
+  setup_benchmark runMergeSort n => n * Nat.log2 (n + 1)
+end Sort
+
+namespace Fib
+  setup_benchmark goodFib n => n
+  setup_benchmark badFib  n => 144 ^ n / 89 ^ n
+end Fib
+```
+
+```bash
+$ lake exe bench list --filter Sort
+$ lake exe bench compare --filter Sort
+```
+
+Tags and namespaces are complementary: namespaces give you
+hierarchical grouping, tags give you cross-cutting categories
+(e.g. `"fast"`, `"regression"`, `"nightly"`).
+
 ## Configuring a benchmark
 
 `BenchmarkConfig` carries the knobs the harness reads at run time:

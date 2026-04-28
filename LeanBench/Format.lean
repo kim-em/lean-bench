@@ -348,16 +348,24 @@ def fmtResult (r : BenchmarkResult) (includeEnv : Bool := true) : String := Id.r
     lines := lines.push (fmtAdvisory r adv)
   return "\n".intercalate lines.toList
 
+/-- Format tags as a compact `[tag1, tag2]` suffix. Empty when no
+    tags are assigned so untagged benchmarks look unchanged. -/
+private def fmtTags (tags : Array String) : String :=
+  if tags.isEmpty then ""
+  else "  [" ++ String.intercalate ", " tags.toList ++ "]"
+
 /-- One-line summary of a registered benchmark, used by `list`. -/
 def fmtSpec (spec : BenchmarkSpec) : String :=
   let h := if spec.hashable then "" else "  (no Hashable)"
-  s!"  {spec.name}    expected complexity: {spec.complexityFormula}{h}"
+  let t := fmtTags spec.config.tags
+  s!"  {spec.name}    expected complexity: {spec.complexityFormula}{h}{t}"
 
 /-- One-line summary of a registered fixed benchmark. The `[fixed]`
     annotation distinguishes it from parametric entries in the list. -/
 def fmtFixedSpec (spec : FixedSpec) : String :=
   let h := if spec.hashable then "" else "  (no Hashable)"
-  s!"  {spec.name}    [fixed] repeats={spec.config.repeats}{h}"
+  let t := fmtTags spec.config.tags
+  s!"  {spec.name}    [fixed] repeats={spec.config.repeats}{h}{t}"
 
 /-- Render a single fixed-benchmark result as a multi-line block:
     one row per measured repeat plus a summary with median/min/max
