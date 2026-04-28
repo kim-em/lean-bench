@@ -214,6 +214,72 @@ The contract for every reader and writer:
 - Order the keys however they like. Consumers MUST NOT depend on key
   order.
 
+## Export format
+
+The **export format** is a separate, user-facing JSON document produced
+by `--export FILE` on `run` and `compare`. It is distinct from the
+JSONL wire format described above:
+
+| aspect | JSONL wire format | Export format |
+|--------|-------------------|--------------|
+| scope | one row per child invocation | one document per `run` / `compare` |
+| audience | internal (child → parent) | external (CI, dashboards, baselines) |
+| structure | newline-delimited JSON objects | single JSON object |
+| version key | `schema_version` | `export_schema_version` |
+| source of truth | `LeanBench/Schema.lean` | `LeanBench/Export.lean` |
+
+The two version counters are independent. Changes to the JSONL wire
+format do not force a bump of `export_schema_version`, and vice versa.
+
+### Export document structure
+
+```json
+{
+  "export_schema_version": 1,
+  "lean_bench_version": "0.1.0",
+  "env": { ... },
+  "results": [ ... ],
+  "baseline_comparison": [ ... ]
+}
+```
+
+- **`export_schema_version`** (integer, required): current version is **1**.
+- **`lean_bench_version`** (string): `LeanBench.libraryVersion`.
+- **`env`** (object | null): top-level reproducibility metadata (same
+  schema as the JSONL `env` field). All results in a single export
+  share the same parent env.
+- **`results`** (array): one entry per benchmark result. Each entry has
+  a `"kind"` discriminator (`"parametric"` or `"fixed"`) and carries
+  the full result data: points, ratios, verdict, config, trial
+  summaries, etc.
+- **`baseline_comparison`** (array, optional): present when `--baseline`
+  was used. One entry per matched function with per-param regression /
+  improvement / stable classification.
+
+### Export versioning rules
+
+The same breaking/non-breaking rules as the JSONL format apply:
+
+- Adding a new optional field is non-breaking.
+- Removing or renaming a field, or changing its type, is breaking and
+  bumps `export_schema_version`.
+- Readers MUST reject documents with `export_schema_version` outside
+  their `supportedExportVersions` set.
+
+### Baseline comparison via `--baseline`
+
+`--baseline FILE` on `run` loads a previous export file and compares
+the current run against it at shared parameter values:
+
+- **Parametric**: for each shared param, computes the percentage change
+  in `per_call_nanos` (using the trial-summary median when outer trials
+  > 1). Params where the current run is slower than baseline by more
+  than `--regression-threshold` (default 10%) are flagged as
+  regressions. Params faster by the same margin are improvements.
+- **Fixed**: compares median wall time.
+- **Exit code**: non-zero when any regression is detected, making the
+  feature CI-usable without parsing terminal output.
+
 ## Migration
 
 There are no historical schema versions yet — `schema_version == 1`

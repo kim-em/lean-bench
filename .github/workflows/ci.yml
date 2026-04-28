@@ -69,6 +69,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/e2e_benchmark_test
 
+      - name: export + baseline comparison test (issue #3)
+        shell: bash
+        run: ./.lake/build/bin/export_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's

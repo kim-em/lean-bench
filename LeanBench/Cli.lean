@@ -7,6 +7,7 @@ import LeanBench.Child
 import LeanBench.Compare
 import LeanBench.Verify
 import LeanBench.Format
+import LeanBench.Export
 
 /-!
 # `LeanBench.Cli` — argv dispatcher
@@ -128,24 +129,57 @@ def runListCmd (_ : Cli.Parsed) : IO UInt32 := do
     IO.println (Format.fmtFixedSpec e.spec)
   return 0
 
-/-- Dispatch `run NAME` by registration kind. Parametric registry
-    is queried first; if not found, the fixed registry; otherwise
-    a user-facing error. -/
+/-- Shared post-run logic: baseline comparison + export. Returns
+the exit code (non-zero on regressions). Issue #3. -/
+private def handleBaselineAndExport
+    (parametric : Array BenchmarkResult)
+    (fixed : Array FixedResult)
+    (env? : Option Env)
+    (baselinePath? exportPath? : Option String)
+    (threshold : Float) : IO UInt32 := do
+  -- Baseline comparison
+  let mut exitCode : UInt32 := 0
+  let mut baselineReports? : Option (Array Export.BaselineReport) := none
+  match baselinePath? with
+  | some bp =>
+    let (baseP, baseF, _) ← Export.loadBaseline bp
+    let reports := Export.runBaseline baseP baseF parametric fixed threshold
+    IO.println ""
+    IO.println (Export.fmtBaselineReports reports)
+    let totalReg : Nat := reports.foldl (fun acc r => acc + r.regressionCount) 0
+    if totalReg > 0 then exitCode := 1
+    baselineReports? := some reports
+  | none => pure ()
+  -- Export
+  match exportPath? with
+  | some ep =>
+    let json := Export.toJsonWithBaseline parametric fixed env? baselineReports?
+    IO.FS.writeFile ep (json.pretty ++ "\n")
+    IO.println s!"exported to {ep}"
+  | none => pure ()
+  return exitCode
+
 def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   let nameStr := (p.positionalArg! "name").as! String
   let name := nameStr.toName
+  let exportPath? := parsedFlag? p "export-file" String
+  let baselinePath? := parsedFlag? p "baseline" String
+  let threshold : Float :=
+    (parsedFlag? p "regression-threshold" Float).getD 10.0
   match ← findRuntimeEntry name with
   | some _ =>
     let result ← LeanBench.runBenchmark name (configOverrideFromParsed p)
     IO.println (Format.fmtResult result)
-    return 0
+    handleBaselineAndExport #[result] #[] result.env?
+      baselinePath? exportPath? threshold
   | none =>
     match ← findFixedRuntimeEntry name with
     | some _ =>
       let result ← LeanBench.runFixedBenchmark name
                       (fixedConfigOverrideFromParsed p)
       IO.println (Format.fmtFixedResult result)
-      return 0
+      handleBaselineAndExport #[] #[result] result.env?
+        baselinePath? exportPath? threshold
     | none =>
       IO.eprintln s!"run: unregistered benchmark: {name}"
       return 1
@@ -159,6 +193,7 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
     IO.eprintln "compare: need at least two benchmark names"
     return 1
   let resolved := names.map String.toName
+  let exportPath? : Option String := parsedFlag? p "export-file" String
   let mut allParametric := true
   let mut allFixed := true
   for n in resolved do
@@ -169,11 +204,23 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   if allParametric then
     let report ← LeanBench.compare resolved (configOverrideFromParsed p)
     IO.println (Format.fmtComparison report)
+    match exportPath? with
+    | some ep =>
+      let env? := report.results[0]?.bind (·.env?)
+      Export.exportToFile ep report.results #[] env?
+      IO.println s!"exported to {ep}"
+    | none => pure ()
     return 0
   if allFixed then
     let report ← LeanBench.compareFixed resolved
                     (fixedConfigOverrideFromParsed p)
     IO.println (Format.fmtFixedComparison report)
+    match exportPath? with
+    | some ep =>
+      let env? := report.results[0]?.bind (·.env?)
+      Export.exportToFile ep #[] report.results env?
+      IO.println s!"exported to {ep}"
+    | none => pure ()
     return 0
   IO.eprintln "compare: cannot mix parametric and fixed benchmarks; or one or more names are unregistered"
   return 1
@@ -257,6 +304,9 @@ Each missing flag leaves the declared value untouched."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
+    "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
+    baseline : String;               "Compare against a previous export FILE; report regressions and improvements. Exit code is non-zero when any regression exceeds the threshold."
+    "regression-threshold" : Float;  "Percentage threshold for flagging regressions (default 10.0; e.g. 10 means >10% slower is a regression)."
 
   ARGS:
     name : String;     "Benchmark name (lowercase, as registered)."
@@ -296,6 +346,7 @@ to every benchmark in the comparison."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
+    "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
 
   ARGS:
     ...names : String;     "Two or more benchmark names (variadic)."
