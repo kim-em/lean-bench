@@ -2,6 +2,7 @@ import Lean
 import Std.Sync.Mutex
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.RunEnv
 import LeanBench.Schema
 import LeanBench.Stats
 
@@ -482,6 +483,11 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
+  -- Capture reproducibility metadata at *parent* run start (issue
+  -- #11). Children also stamp env on every JSONL row independently,
+  -- so wire-format consumers don't need to care; this snapshot is
+  -- what surfaces in the human-readable report.
+  let env ← RunEnv.capture
   let spec := { entry.spec with config := cfg }
   let schedule := resolveSchedule cfg entry.complexity
   -- `.custom` skips the doubling probe entirely — we walk the
@@ -545,7 +551,7 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   let annotated :=
     annotateBelowSignalFloor cfg.signalFloorMultiplier spawnFloor points
   let summary := Stats.summarize spec entry.complexity annotated
-  return { summary with spawnFloorNanos? := spawnFloor }
+  return { summary with spawnFloorNanos? := spawnFloor, env? := some env }
 
 /-! ## Fixed-benchmark orchestration -/
 
@@ -691,6 +697,7 @@ def runFixedBenchmark (name : Lean.Name)
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
+  let env ← RunEnv.capture
   -- Warmup: fire-and-forget; we don't fail the run if warmup itself
   -- fails, but we do propagate killed/error status so the user sees
   -- it (recorded as repeatIndex = 0 in the warmup pass — but not
@@ -719,6 +726,7 @@ def runFixedBenchmark (name : Lean.Name)
     minNanos?
     maxNanos?
     hashesAgree
+    env? := some env
   }
 
 end LeanBench

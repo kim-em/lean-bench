@@ -58,11 +58,39 @@ def requiredFixedKeys : Array String :=
 /-- Optional keys emitted on every row today. Absence is equivalent
     to `null`. -/
 def optionalCommonKeys : Array String :=
-  #["kind", "result_hash", "error"]
+  #["kind", "result_hash", "error", "env"]
 
 /-- Optional keys emitted only on parametric rows today. -/
 def optionalParametricKeys : Array String :=
   #["per_call_nanos", "cache_mode"]
+
+/-! ## Environment-metadata sub-keys
+
+The `env` value is itself a JSON object. `envKeys` pins the keys
+its writer emits today. Like `optionalCommonKeys`, this exists so
+the schema-stability test catches accidental drift in the field set
+or its order.
+
+Adding a new metadata field is a one-line edit here plus a matching
+field on `LeanBench.Env`. Removing one is a wire-format break and
+needs a `schemaVersion` bump (the field went from "writers may emit
+it" to "writers don't emit it"; older readers are tolerant but
+older *writers* against newer readers would still pass).
+
+The order matches `LeanBench.RunEnv.toJson`'s emission order so the
+schema test can do a strict array comparison after sorting.
+
+Per issue #11: "Missing metadata is handled explicitly rather than
+silently omitted." Producers MUST therefore emit every key — fields
+the platform can't supply land as JSON `null`, never as an absent
+key. Readers tolerate absence (treat it as `null`) for back-compat
+with hand-rolled fixtures. -/
+def envKeys : Array String :=
+  #["lean_version", "lean_toolchain", "platform_target",
+    "os", "arch", "cpu_model", "cpu_cores", "hostname",
+    "exe_name", "lean_bench_version",
+    "git_commit", "git_dirty",
+    "timestamp_unix_ms", "timestamp_iso"]
 
 /-! ## Cache-mode strings
 

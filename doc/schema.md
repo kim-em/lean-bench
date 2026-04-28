@@ -97,6 +97,7 @@ were `null`.
 |--------------------|------------------|---------|
 | `result_hash`      | string \| null   | Hex-prefixed `0xDEADBEEF` literal (case-insensitive). `null` when the function's return type lacks `Hashable`. |
 | `error`            | string \| null   | Free-form message for `status == "error"`. `null` otherwise. |
+| `env`              | object \| null   | Reproducibility metadata captured at child startup — see [Environment metadata](#environment-metadata). Emitted on every row by current writers; absence is tolerated for back-compat with hand-rolled fixtures. |
 
 `kind` is also classified as optional from the reader's standpoint
 (absence defaults to `"parametric"`), but every current writer emits
@@ -117,8 +118,6 @@ listed here so concurrent feature work claims a stable name from
 the start:
 
 - `alloc_bytes`, `peak_rss_kb` — memory metrics ([#6]).
-- `env` — an object carrying reproducibility metadata: Lean version,
-  toolchain, platform, hostname, … ([#11]).
 - `budget_status` — additional status discriminator for budgeted-run
   rows that were skipped or partially completed ([#9]).
 
@@ -128,6 +127,47 @@ the ones described in their landing PRs.
 [#6]:  https://github.com/kim-em/lean-bench/issues/6
 [#9]:  https://github.com/kim-em/lean-bench/issues/9
 [#11]: https://github.com/kim-em/lean-bench/issues/11
+
+## Environment metadata
+
+The `env` field carries reproducibility metadata captured by the
+child at startup (issue [#11]). It exists so a JSONL row is
+self-describing for downstream tooling: which Lean version
+produced this number? on what hardware? at which git commit?
+
+The value is a JSON object with the following keys. Producers MUST
+emit every key. Fields with no available value land as JSON `null`,
+NOT as an absent key — the issue #11 acceptance criterion is
+"Missing metadata is handled explicitly rather than silently
+omitted." Readers MUST tolerate absent keys as `null` for
+back-compat with hand-rolled fixtures.
+
+| key                  | type            | meaning |
+|----------------------|-----------------|---------|
+| `lean_version`       | string          | `Lean.versionString` — e.g. `"4.30.0-rc2"`. |
+| `lean_toolchain`     | string          | `Lean.toolchain` — matches the `lean-toolchain` file. |
+| `platform_target`    | string          | LLVM target triple. Empty string when missing at compile time. |
+| `os`                 | string          | Coarse OS family: `"linux"` / `"macos"` / `"windows"` / `"emscripten"`. |
+| `arch`               | string \| null  | Architecture parsed from the target triple's leading segment. |
+| `cpu_model`          | string \| null  | Linux: from `/proc/cpuinfo`. macOS / Windows: `null` (best-effort, not yet probed). |
+| `cpu_cores`          | integer \| null | Logical core count. Linux: `/proc/cpuinfo`. Windows: `NUMBER_OF_PROCESSORS` env. |
+| `hostname`           | string \| null  | `hostname(1)` or env-var fallback (`HOSTNAME` / `COMPUTERNAME`). |
+| `exe_name`           | string          | Basename of the running executable. |
+| `lean_bench_version` | string          | `LeanBench.libraryVersion`. |
+| `git_commit`         | string \| null  | Full 40-char SHA from `git rev-parse HEAD` at cwd. `null` when git is unavailable. |
+| `git_dirty`          | bool \| null    | True iff `git status --porcelain` was non-empty. `null` distinguishes "no git" from "clean tree". |
+| `timestamp_unix_ms`  | integer         | Wallclock at capture, ms since Unix epoch. |
+| `timestamp_iso`      | string          | Wallclock at capture, ISO 8601 UTC (`"YYYY-MM-DDTHH:MM:SSZ"`). |
+
+The order writers emit these keys in is fixed by
+`LeanBench.RunEnv.toJson` and pinned by the schema-stability test;
+consumers MUST NOT depend on key order, but adding or removing a
+key without updating both `Schema.envKeys` and the test fixture
+will break the build.
+
+The same env snapshot also rides on the in-memory
+`BenchmarkResult` / `FixedResult` (parent-side capture) and is
+surfaced as a one-line summary in human-readable reports.
 
 ## Compatibility
 

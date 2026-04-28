@@ -13,6 +13,82 @@ open Lean (Name)
 
 namespace LeanBench
 
+/-! ## Reproducibility metadata
+
+Captured once per process (by the child for emission on each JSONL
+row, by the parent for the in-memory `BenchmarkResult`). The data
+shape is `Inhabited` so callers that don't capture env (tests,
+synthesized error rows) get a structural default rather than
+threading an `Option` through every code path; the field on the
+in-memory result *is* an `Option` so "we never captured" stays
+distinguishable from "we captured but every field was unknown."
+
+Field semantics live in `doc/schema.md#environment-metadata`. Fields
+typed `Option α` are best-effort: we capture them when we can and
+emit an explicit `null` rather than silently omitting (per the
+issue #11 acceptance criterion). Always-present fields are
+derivable from Lean compile-time constants (`Lean.versionString`,
+`System.Platform.target`) so no probing is needed for them. -/
+structure Env where
+  /-- `Lean.versionString` — e.g. `"4.30.0-rc2"` or
+      `"4.31.0, commit abc123"` for development builds. -/
+  leanVersion       : String
+  /-- `Lean.toolchain` — e.g. `"leanprover/lean4:v4.30.0-rc2"`.
+      Matches the `lean-toolchain` file format. -/
+  leanToolchain     : String
+  /-- LLVM target triple (`System.Platform.target`), e.g.
+      `"x86_64-unknown-linux-gnu"`. Empty string when missing —
+      Lean records it as `""` in that case, and we propagate the
+      empty string verbatim rather than fabricating a `null`. -/
+  platformTarget    : String
+  /-- Coarse OS family: `"linux"` / `"macos"` / `"windows"` /
+      `"emscripten"` / `"unknown"`. -/
+  os                : String
+  /-- Architecture parsed from the target triple's leading segment
+      (`"x86_64"`, `"aarch64"`, …). `none` when the triple is empty
+      or unparseable. -/
+  arch              : Option String
+  /-- Human-readable CPU model string (`"Intel(R) Xeon(R) ..."`).
+      `none` when we can't read it (non-Linux without subprocess
+      probing, restricted permissions, etc.). -/
+  cpuModel          : Option String
+  /-- Logical core count as the OS sees it. `none` when unavailable. -/
+  cpuCores          : Option Nat
+  /-- Hostname as reported by `gethostname` (via the `HOSTNAME` /
+      `COMPUTERNAME` env var fallback when the syscall is
+      unavailable). `none` when neither is readable. -/
+  hostname          : Option String
+  /-- Basename of `IO.appPath` — the running benchmark executable. -/
+  exeName           : String
+  /-- The lean-bench library version, pinned by
+      `LeanBench.libraryVersion`. -/
+  leanBenchVersion  : String
+  /-- Resolved `git rev-parse HEAD` from the current working
+      directory (full 40-char SHA). `none` when `git` is unavailable
+      or cwd isn't a git repo. -/
+  gitCommit         : Option String
+  /-- True iff the working tree had uncommitted changes at capture
+      time (`git status --porcelain` non-empty). `none` when git
+      isn't available — distinct from `some false`, which means we
+      checked and the tree was clean. -/
+  gitDirty          : Option Bool
+  /-- Wallclock at capture time, milliseconds since the Unix epoch.
+      `Int` because `Std.Time.Timestamp.now` returns a signed offset
+      and we're not in the business of asserting a non-negative
+      epoch. -/
+  timestampUnixMs   : Int
+  /-- Capture-time wallclock as an ISO 8601 UTC string
+      (`"YYYY-MM-DDTHH:MM:SSZ"`). Derived from `timestampUnixMs` so
+      readers can choose either; producers MUST keep the two
+      consistent. -/
+  timestampIso      : String
+  deriving Repr, Inhabited
+
+/-- Library version string. Kept as a single source of truth so
+docs, JSONL rows, and the user-facing report all agree. Bumped at
+release time alongside `lakefile.toml`. -/
+def libraryVersion : String := "0.1.0"
+
 /-- Status of a single measurement. Mirrors the `status` JSONL field. -/
 inductive Status
   | ok
@@ -511,6 +587,13 @@ structure BenchmarkResult where
       below-floor rows) stay on `points` for downstream tooling and
       raw inspection. Issue #4. -/
   trialSummaries : Array TrialSummary := #[]
+  /-- Reproducibility metadata captured at parent run start (issue
+      #11). `none` when the result was assembled outside the
+      `runBenchmark` path (test fixtures, hand-rolled `Inhabited`
+      instances). Children also stamp env on every JSONL row so
+      downstream tools that only see the wire format can recover it
+      independently. -/
+  env? : Option Env := none
   deriving Inhabited, Repr
 
 /-- One diverging param in a `compare`: the param at which results
@@ -678,6 +761,9 @@ structure FixedResult where
       was unavailable across the board). False iff repeats disagreed
       — that's a non-determinism bug in the registered function. -/
   hashesAgree  : Bool
+  /-- Reproducibility metadata captured at parent run start (issue
+      #11). Same semantics as on `BenchmarkResult`. -/
+  env? : Option Env := none
   deriving Inhabited, Repr
 
 /-- A single fixed-benchmark divergence record: the per-function

@@ -149,6 +149,17 @@ def testParametricEmitKeys : IO UInt32 := do
     | .error _ =>
       IO.eprintln "parametric row missing status"
       return 1
+    -- `env` must be a JSON object whose key set matches `Schema.envKeys`.
+    match j.getObjVal? "env" with
+    | .error _ =>
+      IO.eprintln "parametric row missing env (issue #11: env must always be emitted)"
+      return 1
+    | .ok envJson =>
+      let envActual := objKeys envJson
+      let envExpected := sortKeys Schema.envKeys
+      unless envActual == envExpected do
+        IO.eprintln s!"env key set mismatch:\n  got      {envActual}\n  expected {envExpected}"
+        return 1
     return 0
 
 def testFixedEmitKeys : IO UInt32 := do
@@ -176,6 +187,16 @@ def testFixedEmitKeys : IO UInt32 := do
     | .error _ =>
       IO.eprintln "fixed row missing kind discriminator"
       return 1
+    match j.getObjVal? "env" with
+    | .error _ =>
+      IO.eprintln "fixed row missing env (issue #11: env must always be emitted)"
+      return 1
+    | .ok envJson =>
+      let envActual := objKeys envJson
+      let envExpected := sortKeys Schema.envKeys
+      unless envActual == envExpected do
+        IO.eprintln s!"fixed env key set mismatch:\n  got      {envActual}\n  expected {envExpected}"
+        return 1
     return 0
 
 /-! ## Producer-side: pin the canonical key sets
@@ -194,9 +215,16 @@ def testCanonicalKeyConstants : IO UInt32 := do
   let okFixed :=
     Schema.requiredFixedKeys == #["repeat_index"]
   let okOptCommon :=
-    Schema.optionalCommonKeys == #["kind", "result_hash", "error"]
+    Schema.optionalCommonKeys == #["kind", "result_hash", "error", "env"]
   let okOptParametric :=
     Schema.optionalParametricKeys == #["per_call_nanos", "cache_mode"]
+  let okEnvKeys :=
+    Schema.envKeys ==
+      #["lean_version", "lean_toolchain", "platform_target",
+        "os", "arch", "cpu_model", "cpu_cores", "hostname",
+        "exe_name", "lean_bench_version",
+        "git_commit", "git_dirty",
+        "timestamp_unix_ms", "timestamp_iso"]
   let okStatus :=
     Schema.statusStrings ==
       #["ok", "timed_out", "killed_at_cap", "error"]
@@ -205,7 +233,81 @@ def testCanonicalKeyConstants : IO UInt32 := do
     Schema.kindParametric == "parametric" ∧ Schema.kindFixed == "fixed"
   expect "canonical key sets match docs"
     (okCommon ∧ okParametric ∧ okFixed ∧ okOptCommon ∧
-     okOptParametric ∧ okStatus ∧ okVersion ∧ okKindStrings)
+     okOptParametric ∧ okEnvKeys ∧ okStatus ∧ okVersion ∧ okKindStrings)
+
+/-! ## Env capture (issue #11)
+
+Exercise `RunEnv.capture` directly so the round-trip "capture →
+encode → parse → match key set" works without relying on the child
+process. Also pin the always-present invariants: `lean_version`,
+`platform_target`, `os`, and `lean_bench_version` are derivable
+from compile-time constants and must never collapse to empty
+strings or `null`. -/
+
+def testRunEnvCaptureKeyset : IO UInt32 := do
+  let env ← RunEnv.capture
+  let json := RunEnv.toJson env
+  let actual := objKeys json
+  let expected := sortKeys Schema.envKeys
+  unless actual == expected do
+    IO.eprintln s!"RunEnv.toJson key set mismatch:\n  got      {actual}\n  expected {expected}"
+    return 1
+  return 0
+
+def testRunEnvAlwaysPresentFields : IO UInt32 := do
+  let env ← RunEnv.capture
+  -- Compile-time-derivable fields must never be empty.
+  if env.leanVersion.isEmpty then
+    IO.eprintln "RunEnv.leanVersion was empty"
+    return 1
+  if env.leanToolchain.isEmpty then
+    IO.eprintln "RunEnv.leanToolchain was empty"
+    return 1
+  if env.os.isEmpty then
+    IO.eprintln "RunEnv.os was empty"
+    return 1
+  if env.leanBenchVersion.isEmpty then
+    IO.eprintln "RunEnv.leanBenchVersion was empty"
+    return 1
+  if env.timestampIso.isEmpty then
+    IO.eprintln "RunEnv.timestampIso was empty"
+    return 1
+  -- ISO timestamp basic shape: 20 chars, ends in 'Z'.
+  unless env.timestampIso.endsWith "Z" do
+    IO.eprintln s!"RunEnv.timestampIso does not end in 'Z': {env.timestampIso}"
+    return 1
+  return 0
+
+/-- "Missing metadata is handled explicitly rather than silently
+    omitted" — verify each best-effort field renders as JSON `null`
+    rather than disappearing from the object when the underlying
+    `Option` is `none`. We synthesize an `Env` with every probe
+    nulled out and confirm the encoder still emits all
+    `Schema.envKeys`. -/
+def testRunEnvNullsForMissing : IO UInt32 := do
+  let nullEnv : Env := {
+    leanVersion := "x", leanToolchain := "y", platformTarget := "",
+    os := "linux", arch := none, cpuModel := none, cpuCores := none,
+    hostname := none, exeName := "test", leanBenchVersion := "0.1.0",
+    gitCommit := none, gitDirty := none,
+    timestampUnixMs := 0, timestampIso := "1970-01-01T00:00:00Z" }
+  let json := RunEnv.toJson nullEnv
+  let actual := objKeys json
+  let expected := sortKeys Schema.envKeys
+  unless actual == expected do
+    IO.eprintln s!"null-env key set mismatch:\n  got      {actual}\n  expected {expected}"
+    return 1
+  -- Each previously-`none` field must encode as JSON `null`, not
+  -- a missing key. Pin one nullable field per category — string
+  -- (`cpu_model`), nat (`cpu_cores`), bool (`git_dirty`).
+  let isNull (key : String) : Bool :=
+    match json.getObjVal? key with
+    | .ok Lean.Json.null => true
+    | _                  => false
+  unless isNull "cpu_model" ∧ isNull "cpu_cores" ∧ isNull "git_dirty" do
+    IO.eprintln "null-env: expected nullable fields to encode as JSON null"
+    return 1
+  return 0
 
 /-! ## Consumer-side: parse tolerance -/
 
@@ -447,6 +549,9 @@ def testFixedParseRejectsMissingRequired : IO UInt32 := do
 def runTests : IO UInt32 := do
   for (label, t) in
     [ ("canonicalKeyConstants",      testCanonicalKeyConstants)
+    , ("env.captureKeyset",          testRunEnvCaptureKeyset)
+    , ("env.alwaysPresent",          testRunEnvAlwaysPresentFields)
+    , ("env.nullsForMissing",        testRunEnvNullsForMissing)
     , ("emit.parametric",            testParametricEmitKeys)
     , ("emit.fixed",                 testFixedEmitKeys)
     , ("parse.extraKey",             testParseAcceptsExtraKey)
