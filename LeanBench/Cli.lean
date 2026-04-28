@@ -27,9 +27,9 @@ runner). Subcommand layout:
 `run` and `compare` accept run-time `BenchmarkConfig` overrides via
 flags (`--max-seconds-per-call`, `--target-inner-nanos`,
 `--param-floor`, `--param-ceiling`, `--warmup-fraction`,
-`--slope-tolerance`). Each flag corresponds 1:1 with a
-`ConfigOverride` field; missing flags leave the declared config
-untouched.
+`--slope-tolerance`, `--param-schedule`). Each flag corresponds 1:1
+with a `ConfigOverride` field; missing flags leave the declared
+config untouched.
 
 CLI parsing uses `Cli` (mhuisi/lean4-cli).
 -/
@@ -53,6 +53,22 @@ instance : Cli.ParseableType Float where
       | Except.ok (Lean.Json.num n) => some n.toFloat
       | _ => none
 
+/-- A `ParamSchedule` `ParseableType` for `Cli`. Recognises the three
+ladder shapes by name: `auto` (default — auto-pick from declared
+complexity), `doubling`, and `linear`. The CLI form intentionally
+doesn't expose the `linear samples` count; pin a different sample
+count at declaration time via `where { paramSchedule := .linear 32 }`.
+String comparison is case-insensitive so `--param-schedule LINEAR`
+works too. -/
+instance : Cli.ParseableType LeanBench.ParamSchedule where
+  name := "ParamSchedule"
+  parse? s :=
+    match s.toLower with
+    | "auto"     => some .auto
+    | "doubling" => some .doubling
+    | "linear"   => some .linear
+    | _          => none
+
 namespace Cli
 
 /-- Read a flag's typed value from a `Cli.Parsed` if it was passed.
@@ -73,7 +89,8 @@ def configOverrideFromParsed (p : Cli.Parsed) : ConfigOverride :=
     paramCeiling?          := parsedFlag? p "param-ceiling" Nat
     paramFloor?            := parsedFlag? p "param-floor" Nat
     verdictWarmupFraction? := parsedFlag? p "warmup-fraction" Float
-    slopeTolerance?        := parsedFlag? p "slope-tolerance" Float }
+    slopeTolerance?        := parsedFlag? p "slope-tolerance" Float
+    paramSchedule?         := parsedFlag? p "param-schedule" LeanBench.ParamSchedule }
 
 /-- Build a `FixedConfigOverride` from override flags. Only fields
 that share a flag namespace with parametric (`max-seconds-per-call`)
@@ -207,6 +224,7 @@ Each missing flag leaves the declared value untouched."
     "param-ceiling" : Nat;           "Parametric only: highest param the doubling ladder reaches before stopping."
     "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
+    "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:
@@ -240,6 +258,7 @@ to every benchmark in the comparison."
     "param-ceiling" : Nat;           "Parametric only: highest param the doubling ladder reaches before stopping."
     "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
+    "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
 
   ARGS:
