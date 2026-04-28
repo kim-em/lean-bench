@@ -125,15 +125,51 @@ private def rawRow (cMaybe : Option Float) (dp : DataPoint) : Row :=
   -- Doubling probe rows in `.linear` mode are demoted from the
   -- verdict; mark them so a row with valid timing but `C=—` doesn't
   -- look like a measurement failure.
-  let status :=
+  let probeMarked :=
     if dp.status == .ok && !dp.partOfVerdict then baseStatus ++ " [probe]"
     else baseStatus
+  -- Below-signal-floor rows are excluded from the verdict because
+  -- their per-call time is dominated by subprocess overhead — flag
+  -- them so users see why `C=—` for an `ok` row. Issue #15.
+  let status :=
+    if dp.belowSignalFloor then probeMarked ++ " [<floor]"
+    else probeMarked
   { param       := fmtNatUnderscores dp.param
     perCallNum  := num
     perCallUnit := unit
     repeats     := fmtRepeats dp.innerRepeats
     cStr
     status }
+
+/-- Suggestion suffix used in several advisories. Pinned here so the
+    `where { ... }` literal stays out of `s!"..."` interpolation
+    (Lean's interpolation grammar reserves `{` / `}`). -/
+private def customScheduleHint : String :=
+  "use `where { paramSchedule := .custom #[...] }` to pin a tractable rung set"
+
+/-- Render one `Advisory` for a result as a single advisory line.
+Each message is structured as `‼ <symptom>; <suggestion>` so users
+see both why the harness is concerned and what knob to turn next.
+Issue #15. -/
+private def fmtAdvisory (r : BenchmarkResult) : Advisory → String
+  | .belowSignalFloor =>
+    let floorStr := match r.spawnFloorNanos? with
+      | some n => s!" (per-spawn floor ≈ {fmtNanosStr n})"
+      | none => ""
+    s!"  ‼ every measurement was below {fmtFloat3 r.config.signalFloorMultiplier}× the per-spawn floor{floorStr}; the function is too fast for child-process measurement at the configured params. Try `--param-ceiling` higher, wrap the function in a hot inner loop, or use `setup_fixed_benchmark` for a single-shot reading."
+  | .partiallyBelowSignalFloor n total =>
+    s!"  ‼ {n}/{total} ok rows were below {fmtFloat3 r.config.signalFloorMultiplier}× the per-spawn floor; those rungs are excluded from the verdict. Raise `--param-floor` to skip the cold regime if the trimmed warmup isn't enough."
+  | .allCapped =>
+    s!"  ‼ every measurement hit the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); no `ok` row landed. The benchmark is too slow at the configured params. Bump `--max-seconds-per-call`, lower `--param-ceiling`, or " ++ customScheduleHint ++ "."
+  | .truncatedAtCap p =>
+    -- Phrased order-agnostically: "later rungs were skipped" works
+    -- for the doubling/linear ladders (ascending) and for `.custom`
+    -- (whatever order the user listed). Codex flagged that
+    -- "no rungs above this point" was misleading for sparse / non-
+    -- monotone custom ladders.
+    s!"  ‼ ladder stopped at param={p} after hitting the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); subsequent rungs in the schedule were skipped. Raise the cap if you need to reach further, or " ++ customScheduleHint ++ "."
+  | .tooFewVerdictRows kept =>
+    s!"  ‼ only {kept} verdict-eligible row(s) survived warmup-trim + signal-floor filter; the verdict is below resolution. Lower `--warmup-fraction`, raise `--param-ceiling`, or " ++ customScheduleHint ++ "."
 
 /-- Render one `BenchmarkResult` as a multi-line block with every
 numeric value bounded to 3 decimals and every column width derived
@@ -206,6 +242,8 @@ def fmtResult (r : BenchmarkResult) : String := Id.run do
   | some n =>
     lines := lines.push s!"  per-spawn floor (harness self-measurement): {fmtNanosStr n}"
   | none => pure ()
+  for adv in r.advisories do
+    lines := lines.push (fmtAdvisory r adv)
   return "\n".intercalate lines.toList
 
 /-- One-line summary of a registered benchmark, used by `list`. -/

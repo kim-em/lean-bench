@@ -12,6 +12,7 @@ defaultTargets = [
   "child_outcome_benchmark_test", "format_benchmark_test",
   "e2e_benchmark_test", "cli_errors_benchmark_test",
   "schema_benchmark_test", "cache_mode_benchmark_test",
+  "advisory_benchmark_test",
 ]
 
 [[require]]
@@ -117,3 +118,8 @@ root = "LeanBenchTestSchema"
 name = "cache_mode_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestCacheMode"
+
+[[lean_exe]]
+name = "advisory_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestAdvisory"

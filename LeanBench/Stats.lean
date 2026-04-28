@@ -19,8 +19,10 @@ namespace Stats
 
 /-- Compute the per-point ratio C = perCallNanos / complexity(param).
     Skips param=0 and param=1 (denominator may be 0 or 1, noisy),
-    any non-`ok` data points, and any rows flagged as not part of
-    the verdict (doubling-probe rows in `.linear` mode). -/
+    any non-`ok` data points, any rows flagged as not part of the
+    verdict (doubling-probe rows in `.linear` mode), and any rows
+    whose total wall time was dominated by spawn overhead
+    (`belowSignalFloor` — see issue #15). -/
 def ratiosFromPoints
     (complexity : Nat → Nat)
     (points : Array DataPoint) :
@@ -30,6 +32,7 @@ def ratiosFromPoints
     if dp.param < 2 then continue
     if dp.status != .ok then continue
     if !dp.partOfVerdict then continue
+    if dp.belowSignalFloor then continue
     let d := complexity dp.param
     if d == 0 then continue
     acc := acc.push (dp.param, dp.perCallNanos / d.toFloat)
@@ -127,7 +130,65 @@ def deriveVerdict (ratios : Array Ratio)
           else .inconclusive
     (v, some cMin, some cMax, slope?, dropCount)
 
-/-- Build a `BenchmarkResult` from spec + complexity closure + collected points. -/
+/-- Compute the `Advisory` array for a result, given the post-spawn-floor
+    annotated points. Pure — exposed so `runBenchmark` can call it once
+    `belowSignalFloor` flags are settled, and so unit tests can drive
+    it without spawning subprocesses.
+
+    Order matters: a single result can carry multiple advisories
+    (e.g. `belowSignalFloor` + `truncatedAtCap`); the format renders
+    them in the order produced here, which matches the order users
+    typically want to see them — global quality issues first
+    (everything below floor / everything capped), then partial /
+    structural issues (some below floor, ladder truncated, too few
+    verdict rows). -/
+def computeAdvisories (points : Array DataPoint) (verdictRows : Nat) :
+    Array Advisory := Id.run do
+  let mut out : Array Advisory := #[]
+  -- Count `ok` rows (including any flagged below-floor) and how many
+  -- of those `ok` rows were below the signal floor. A row that errored
+  -- isn't a candidate for "below signal floor" advice — its data is
+  -- missing, not noise.
+  let okPoints := points.filter (·.status == .ok)
+  let belowFloor := okPoints.filter (·.belowSignalFloor)
+  if okPoints.isEmpty then
+    -- No `ok` rows at all. If every row hit the cap, that's
+    -- `allCapped`; if every row errored, the result already
+    -- communicates that without an advisory (the table shows
+    -- `[error: ...]` per row).
+    let cappedRows := points.filter fun dp =>
+      dp.status == .timedOut || dp.status == .killedAtCap
+    if !cappedRows.isEmpty && cappedRows.size == points.size then
+      out := out.push .allCapped
+  else if belowFloor.size == okPoints.size then
+    out := out.push .belowSignalFloor
+  else if belowFloor.size > 0 then
+    out := out.push (.partiallyBelowSignalFloor belowFloor.size okPoints.size)
+  -- Truncated-at-cap: at least one `ok` row landed AND somewhere in
+  -- the ladder a row hit the cap. The truncation point is the param
+  -- of the first capped row.
+  if !okPoints.isEmpty then
+    let firstCapped := points.findSome? fun dp =>
+      match dp.status with
+      | .timedOut | .killedAtCap => some dp.param
+      | _ => none
+    match firstCapped with
+    | some p => out := out.push (.truncatedAtCap p)
+    | none => pure ()
+  -- Verdict resolution: too few rows survive the warmup trim + floor
+  -- filter for the slope fit / range check to be meaningful.
+  if verdictRows < 3 && !okPoints.isEmpty then
+    out := out.push (.tooFewVerdictRows verdictRows)
+  return out
+
+/-- Build a `BenchmarkResult` from spec + complexity closure + collected points.
+
+    `points` should already carry `belowSignalFloor` annotations;
+    `runBenchmark` sets those after measuring the spawn floor and
+    before calling `summarize`. The verdict ratios and the advisory
+    list are both derived from the same annotated points, so the
+    "fewer than 3 verdict rows" advisory exactly matches what
+    `deriveVerdict` saw. -/
 def summarize
     (spec : BenchmarkSpec)
     (complexity : Nat → Nat)
@@ -137,6 +198,8 @@ def summarize
   let (verdict, cMin?, cMax?, slope?, dropped) :=
     deriveVerdict ratios spec.config.verdictWarmupFraction
       spec.config.slopeTolerance spec.config.narrowRangeNoiseFloor
+  let kept := ratios.size - dropped
+  let advisories := computeAdvisories points kept
   { function := spec.name
   , complexityFormula := spec.complexityFormula
   , hashable := spec.hashable
@@ -147,7 +210,8 @@ def summarize
   , cMin?
   , cMax?
   , verdictDroppedLeading := dropped
-  , slope? }
+  , slope?
+  , advisories }
 
 end Stats
 end LeanBench

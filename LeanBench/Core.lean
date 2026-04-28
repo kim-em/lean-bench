@@ -1,4 +1,5 @@
 import Lean.Data.Name
+import Std.Data.HashSet
 
 /-!
 # `LeanBench.Core` — shared types
@@ -46,6 +47,16 @@ structure DataPoint where
       else, including all rows in `.doubling` mode. Parent-side only —
       not serialized in the child JSONL. -/
   partOfVerdict : Bool := true
+  /-- True when this row's `totalNanos` is below
+      `signalFloorMultiplier × spawnFloorNanos`, i.e. the entire
+      measurement is small enough that subprocess-spawn cost dominates
+      the inner-loop work. Such rows are unreliable as algorithm
+      timing data — they are excluded from the verdict reduction
+      (see `Stats.ratiosFromPoints`) and rendered with a `[<floor]`
+      annotation in the report. Parent-side only; computed after the
+      spawn-floor self-measurement so the child JSONL can stay
+      schema-stable. -/
+  belowSignalFloor : Bool := false
   deriving Repr, Inhabited
 
 /-- Heuristic verdict — see SPEC v0.1: weak labels by design. Decided
@@ -74,14 +85,24 @@ def Verdict.describe : Verdict → String
     run inside that bracket so the high-`n` regime where the model
     dominates overhead is well-sampled.
 
+    `.custom` runs an explicit user-specified list of params, in
+    order, with no doubling probe and no auto-bracketing. Right for
+    workloads where the natural inputs are non-uniform (e.g. file
+    sizes from a corpus) or where the user already knows which
+    `n` matter — see issue #15. The harness still applies the
+    wallclock cap and stops as soon as a row hits it.
+
     `.auto` is the default — at runtime it inspects the declared
-    complexity and resolves to one of the above. The heuristic
-    compares `complexity(2n)/complexity(n)` at two scales: for any
-    `n^k` it is constant (→ doubling); for any `b^n` it grows
-    geometrically (→ linear). -/
+    complexity and resolves to `.doubling` or `.linear`. The
+    heuristic compares `complexity(2n)/complexity(n)` at two scales:
+    for any `n^k` it is constant (→ doubling); for any `b^n` it
+    grows geometrically (→ linear). `.custom` is never auto-picked;
+    it is opt-in only via declaration-time
+    `where { paramSchedule := .custom #[...] }`. -/
 inductive ParamSchedule
   | doubling
   | linear (samples : Nat := 16)
+  | custom (params : Array Nat)
   | auto
   deriving Inhabited, Repr, BEq
 
@@ -182,6 +203,17 @@ structure BenchmarkConfig where
       is not preserved across measurements. The two modes measure
       different things; see `doc/advanced.md#cache-modes`. -/
   cacheMode : CacheMode := .warm
+  /-- Multiplier on the per-spawn floor below which a row's
+      `totalNanos` is treated as dominated by subprocess overhead
+      rather than algorithm work. Rows below this threshold are
+      flagged `belowSignalFloor` (rendered with a `[<floor]`
+      annotation) and excluded from the verdict reduction. Default
+      `10.0` matches the rule of thumb in `doc/quickstart.md` ("any
+      data point with total_nanos smaller than ~10× the spawn floor
+      is noise"). Set to `1.0` to disable the check (every row is
+      retained); values ≤ 0 are rejected by `validate`. See issue
+      #15 for the design discussion. -/
+  signalFloorMultiplier : Float := 10.0
   deriving Inhabited, Repr, BEq
 
 /-- Optional run-time overrides applied on top of a benchmark's
@@ -272,6 +304,24 @@ def BenchmarkConfig.validate (c : BenchmarkConfig) : Except String Unit := do
     .error s!"BenchmarkConfig.verdictWarmupFraction must be in [0, 1); got {c.verdictWarmupFraction}"
   unless c.paramFloor ≤ c.paramCeiling do
     .error s!"BenchmarkConfig.paramFloor must be ≤ paramCeiling; got {c.paramFloor} > {c.paramCeiling}"
+  unless c.signalFloorMultiplier ≥ 1.0 do
+    .error s!"BenchmarkConfig.signalFloorMultiplier must be ≥ 1.0; got {c.signalFloorMultiplier}"
+  -- A `.custom` ladder with an empty params list is almost certainly
+  -- a typo (and would produce an empty result); reject up front.
+  -- Duplicate params are also rejected: the formatter keys the `C`
+  -- column and the warmup-trim dagger by `param`, so two rows with
+  -- the same param would render with the same `C` (and either both
+  -- or neither carry the dagger). That makes the report misleading
+  -- even when the underlying measurements are fine. Codex flagged
+  -- this in the issue #15 review.
+  match c.paramSchedule with
+  | .custom ps =>
+    unless ps.size > 0 do
+      .error s!"BenchmarkConfig.paramSchedule = .custom #[] is empty; supply at least one param"
+    let dedup : Std.HashSet Nat := ps.foldl (·.insert ·) {}
+    unless dedup.size == ps.size do
+      .error s!"BenchmarkConfig.paramSchedule = .custom contains duplicate params; got {ps}"
+  | _ => pure ()
   pure ()
 
 /-- One entry in the benchmark registry. Stored as `Name`s plus a
@@ -305,6 +355,45 @@ structure BenchmarkSpec where
   for the verdict. -/
 abbrev Ratio := Nat × Float
 
+/-- Edge-case classifications surfaced on `BenchmarkResult.advisories`.
+Pure data — the format layer turns each into an actionable message.
+
+A single result may carry multiple advisories: e.g. a benchmark whose
+function is too fast AND whose ladder hit the cap on the largest rung
+gets both `belowSignalFloor` and `truncatedAtCap`. The advisories are
+not mutually exclusive and the format renders them in declaration
+order. See issue #15.
+
+Parent-side only; not serialized in the child JSONL row. -/
+inductive Advisory
+  /-- Every successful row was below the signal-floor threshold —
+      total wall time was dominated by per-spawn overhead, not the
+      algorithm under test. The verdict cannot be trusted; the
+      benchmark is too fast for child-process measurement at the
+      configured params. -/
+  | belowSignalFloor
+  /-- `n` rows out of total `total` were below the signal-floor
+      threshold but at least one row above it survived. The verdict
+      is computed on the surviving rows; the cold leading rungs are
+      noted for context. -/
+  | partiallyBelowSignalFloor (n total : Nat)
+  /-- Every measurement hit the wallclock cap (timed-out or
+      killed-at-cap) — no `ok` row landed at all. The benchmark is
+      too slow at the configured params; bump `--max-seconds-per-call`
+      or lower `--param-ceiling`. -/
+  | allCapped
+  /-- The ladder produced at least one `ok` row but was truncated by
+      the wallclock cap before reaching `paramCeiling`. The
+      `firstFail` param is the rung that was killed; the trimmed
+      tail above it was never measured. -/
+  | truncatedAtCap (firstFail : Nat)
+  /-- After applying both the warmup trim and the signal-floor
+      filter, fewer than 3 rows remain — the verdict reduction has
+      no resolution. Either the ladder is too short or every rung
+      is in an edge regime. -/
+  | tooFewVerdictRows (kept : Nat)
+  deriving Repr, Inhabited, BEq
+
 /-- Result of a single benchmark invocation. -/
 structure BenchmarkResult where
   function   : Lean.Name
@@ -337,6 +426,12 @@ structure BenchmarkResult where
   /-- The harness's own per-spawn floor at the time of this run, for
       comparison against the smallest `totalNanos` recorded. -/
   spawnFloorNanos? : Option Nat := none
+  /-- Edge-case advisories surfaced for this run — see `Advisory`.
+      Empty when the run looks ordinary (most rows above the signal
+      floor, none capped, the ladder ran to completion). The format
+      layer renders these as a hint section after the verdict line.
+      Issue #15. -/
+  advisories : Array Advisory := #[]
   deriving Inhabited, Repr
 
 /-- One diverging param in a `compare`: the param at which results
