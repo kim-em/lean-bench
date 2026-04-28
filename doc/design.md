@@ -8,8 +8,9 @@ user-facing usage.
 
 Every measurement of `f` at a chosen `param` spawns a child process.
 The child does the timing AND the auto-tuned-repeat loop; the parent
-only spawns, reads stdout, and SIGTERMs (via `timeout(1)`) if the
-batch exceeds `maxSecondsPerCall`.
+spawns the child via `IO.Process.spawn`, reads stdout, and runs a
+sibling killer `Task` that calls `IO.Process.Child.kill` if the
+batch exceeds `maxSecondsPerCall + killGraceMs`.
 
 Why subprocess: Lean 4 has no portable in-process interrupt for
 arbitrary computation. `Task` cancellation is cooperative; `IO.sleep`
@@ -17,17 +18,51 @@ doesn't help. The only reliable way to enforce a wallclock cap on a
 single measurement is to give it its own process and kill the
 process.
 
-Why `timeout(1)` rather than rolling our own SIGTERM/SIGKILL: the
-coreutils utility already implements escalation cleanly, handles
-process groups, and tracks exit status conventions (124 = timed out,
-137 = SIGKILL, etc.). Less code, more reliable.
+The kill path is pure Lean — no dependency on GNU coreutils
+`timeout(1)` or any other external utility. `IO.Process.Child.kill`
+is implemented for every platform Lean supports, so the harness
+runs on Linux, macOS, and Windows out of the box.
 
-v0.1 has been tested only on Linux. macOS likely works if you have
-GNU coreutils installed (the `timeout` binary). Native Windows is
-not supported in v0.1 because it doesn't ship `timeout(1)`. None of
-this is fundamental — `IO.Process.Child.kill` exists on every
-platform Lean supports, so a pure-Lean cross-platform implementation
-is just engineering. See PLAN.md F0.
+### Killer task: parent / killer coordination
+
+The parent spawns the child and immediately starts a sibling
+`Task` whose job is to kill the child if the wall budget runs out.
+A `BaseMutex` plus two `IO.Ref Bool` flags (`mainDoneRef`,
+`killedRef`) coordinate the two:
+
+1. Parent reads stdout (one JSONL row).
+2. Parent takes the lock and sets `mainDoneRef := true`, then
+   releases.
+3. Parent calls `child.wait` (which on POSIX reaps the pid).
+4. Parent inspects `killedRef`. `true` → synthesize a `killedAtCap`
+   row; `false` → use the parsed JSONL row (or synthesize an `error`
+   row if the exit code is non-zero).
+
+Meanwhile, the killer:
+
+1. Polls `mainDoneRef` while sleeping in 25 ms increments up to the
+   deadline (`maxSecondsPerCall + killGraceMs`). Polling lets it
+   exit promptly when the parent finishes early — without it, every
+   batch would block for the full deadline.
+2. If the deadline elapses without `mainDoneRef` becoming `true`,
+   the killer takes the lock, re-reads `mainDoneRef`, and if still
+   `false` sets `killedRef := true` and calls `Child.kill`.
+
+The lock guarantees the dangerous race is impossible: the parent
+sets `mainDoneRef := true` *before* calling `child.wait`, so by the
+time the kernel can reap the pid, any subsequent killer
+critical-section will observe `mainDoneRef = true` and skip the
+kill. We never call `kill(2)` on a pid that has already been reaped
+(which on POSIX could hit a recycled pid and signal an unrelated
+process).
+
+There is a microsecond-scale logical (not safety) race: if the
+child happens to exit naturally just as the killer fires, the
+killer can grab the lock first, see `mainDoneRef = false`, and
+mark the row `killedAtCap` even though the child finished
+within the budget. The row is dropped from `consistentWith…` ratio
+analysis anyway, and the cap was effectively reached, so this is
+benign.
 
 ## Why the timing AND repeat-doubling are in the child
 
@@ -116,10 +151,11 @@ branching leaking through the design.
 ## Failure modes and synthesized rows
 
 If the child exits 0 with a parseable JSONL row → use it. If the
-child exits 124 (`timeout` graceful) or 137 (SIGKILL after
-`--kill-after`) → synthesize a `killedAtCap` row. Other non-zero exits
-get a synthesized `error` row. Both paths are explicitly tested in
-`test/`.
+killer task fired (i.e. `killedRef = true`) → synthesize a
+`killedAtCap` row regardless of the exit code the OS reports. Other
+non-zero exits with no kill get a synthesized `error` row. The
+roundtrip path is exercised by `test/`; the kill path is exercised
+by the example benchmarks at the top end of the doubling ladder.
 
 ## Ladder semantics
 

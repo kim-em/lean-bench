@@ -4,10 +4,16 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -17,33 +23,42 @@ jobs:
           # the LeanBench library, all three example libs+exes (Fib, Sort,
           # BinarySearch), the LeanBenchTest library (whose `#guard_msgs`
           # blocks in LeanBenchTestSetupErrors.lean are checked at build
-          # time), and the test exes (roundtrip_benchmark_test,
-          # verify_benchmark_test).
+          # time), and every test exe.
           build-args: ""
           test: false
+          use-github-cache: true
 
       # Test exes: each exits non-zero on failure.
       - name: roundtrip test
+        shell: bash
         run: ./.lake/build/bin/roundtrip_benchmark_test
 
       - name: verify-command test
+        shell: bash
         run: ./.lake/build/bin/verify_benchmark_test
+
+      - name: kill-path test (pure-Lean child-kill timeout)
+        shell: bash
+        run: ./.lake/build/bin/kill_path_benchmark_test
 
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's
       # maxSecondsPerCall, so it cannot hang CI.
       - name: fib example list & verify
+        shell: bash
         run: |
           ./.lake/build/bin/fib_benchmark_example list
           ./.lake/build/bin/fib_benchmark_example verify
 
       - name: sort example list & verify
+        shell: bash
         run: |
           ./.lake/build/bin/sort_benchmark_example list
           ./.lake/build/bin/sort_benchmark_example verify
 
       - name: binary-search example list & verify
+        shell: bash
         run: |
           ./.lake/build/bin/binary_search_benchmark_example list
           ./.lake/build/bin/binary_search_benchmark_example verify

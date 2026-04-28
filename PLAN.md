@@ -8,23 +8,6 @@ verdict, and the `Fib` / `Sort` / `BinarySearch` examples.
 This file enumerates the post-v0.1 features. None are required for
 the library to be useful as-is. Order is rough priority.
 
-## F0. Pure-Lean cross-platform kill
-
-v0.1 enforces `maxSecondsPerCall` by spawning the child under GNU
-coreutils `timeout(1)`. That works on Linux out of the box, on macOS
-if coreutils is installed, on WSL, and not at all on native Windows.
-
-Replace with: spawn the child directly via `IO.Process.spawn`, then
-kick off a sibling `Task` that sleeps for `maxSecondsPerCall +
-killGraceMs` and calls `IO.Process.Child.kill`. Race the kill against
-`child.wait`; whichever fires first wins. This is platform-agnostic
-because `IO.Process.Child.kill` is implemented for every platform
-Lean supports.
-
-Acceptance: removes all references to the `timeout` binary; CI runs
-the test suite on Linux, macOS, and Windows; killed-at-cap rows
-still get synthesized correctly when the child dies before emitting.
-
 ## F1. Auto-fit complexity
 
 Allow `setup_benchmark fib n` (no `=>`); the library tries fitting a
