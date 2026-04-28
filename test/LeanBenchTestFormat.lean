@@ -77,6 +77,7 @@ private def linearPoints : Array DataPoint := #[
 private def sampleResult : BenchmarkResult :=
   { function := sampleSpec.name
   , complexityFormula := sampleSpec.complexityFormula
+  , hashable := true
   , config := sampleSpec.config
   , points := linearPoints
   , ratios := #[(2, 12.5), (4, 12.5), (8, 12.5)]
@@ -92,6 +93,7 @@ private def sampleResult : BenchmarkResult :=
 private def sampleResult2 : BenchmarkResult :=
   { function := `Sample.otherFn
   , complexityFormula := "n"
+  , hashable := true
   , config := {}
   , points := #[
       { param := 2, innerRepeats := 4, totalNanos := 200
@@ -111,10 +113,31 @@ private def sampleResult2 : BenchmarkResult :=
   , slope? := some 0.0
   , spawnFloorNanos? := none }
 
+private def sampleDivergence : DivergenceDetail :=
+  { param := 2
+  , hashes     := #[(`Sample.linearFn, some 0xabc), (`Sample.otherFn, some 0xdef)]
+  , dissenters := #[`Sample.otherFn] }
+
 private def sampleComparison : ComparisonReport :=
   { results := #[sampleResult, sampleResult2]
   , commonParams := #[2, 4, 8]
-  , agreeOnCommon := .divergedAt #[(`Sample.linearFn, `Sample.otherFn, 2)] }
+  , agreeOnCommon := .divergedAt #[sampleDivergence] }
+
+/-- Multi-divergence variant: same earliest-diverging param 2 plus
+    follow-on divergences at 4 and 8, used to pin the
+    `also diverged at:` line. -/
+private def sampleComparisonMulti : ComparisonReport :=
+  { sampleComparison with
+    agreeOnCommon := .divergedAt #[
+      sampleDivergence,
+      { sampleDivergence with param := 4 },
+      { sampleDivergence with param := 8 } ] }
+
+/-- Hash-unavailable variant: one of the compared functions has no
+    Hashable instance, so we can't check agreement at all. -/
+private def sampleComparisonHashUnavailable : ComparisonReport :=
+  { sampleComparison with
+    agreeOnCommon := .hashUnavailable #[`Sample.otherFn] }
 
 private def fixedPoints : Array FixedDataPoint := #[
   { repeatIndex := 0, totalNanos := 1_000_000
@@ -126,6 +149,7 @@ private def fixedPoints : Array FixedDataPoint := #[
 
 private def sampleFixedResult : FixedResult :=
   { function := sampleFixedSpec.name
+  , hashable := true
   , config := sampleFixedSpec.config
   , points := fixedPoints
   , medianNanos? := some 1_050_000
@@ -203,8 +227,39 @@ def testFmtComparison : IO UInt32 := do
     "  verdict: consistent with declared complexity (cMin=25.000, cMax=25.000, β=+0.000)\n" ++
     "\n" ++
     "common params (apples-to-apples): 2, 4, 8\n" ++
-    "agreement: DIVERGED on 1 (function, function, param) triples"
+    "agreement: DIVERGED on 1 param — earliest divergence at param=2:\n" ++
+    "    Sample.linearFn  hash=0xabc    (baseline)\n" ++
+    "    Sample.otherFn   hash=0xdef    differs from Sample.linearFn\n" ++
+    "  (only result hashes are available; see doc/quickstart.md for what to expect)"
   snapshot "fmtComparison" expected (Format.fmtComparison sampleComparison)
+
+/-- Multi-divergence: the earliest diverging param is highlighted
+    with a hash table; later params land on a compact summary line. -/
+def testFmtComparisonMulti : IO UInt32 := do
+  let rendered := Format.fmtComparison sampleComparisonMulti
+  let needles : List String := [
+    "DIVERGED on 3 params — earliest divergence at param=2:",
+    "Sample.linearFn  hash=0xabc    (baseline)",
+    "Sample.otherFn   hash=0xdef    differs from Sample.linearFn",
+    "also diverged at: 4, 8" ]
+  for needle in needles do
+    if !((rendered.splitOn needle).length > 1) then
+      IO.eprintln s!"FAIL fmtComparison.multi: missing '{needle}' in:\n{rendered}"
+      return 1
+  return 0
+
+/-- Hash-unavailable: the report names the offending function and
+    points the user at the fix. -/
+def testFmtComparisonHashUnavailable : IO UInt32 := do
+  let rendered := Format.fmtComparison sampleComparisonHashUnavailable
+  let needles : List String := [
+    "agreement: cannot check — no Hashable instance for: Sample.otherFn",
+    "register a Hashable instance" ]
+  for needle in needles do
+    if !((rendered.splitOn needle).length > 1) then
+      IO.eprintln s!"FAIL fmtComparison.hashUnavailable: missing '{needle}' in:\n{rendered}"
+      return 1
+  return 0
 
 def testFmtFixedResult : IO UInt32 := do
   let expected :=
@@ -297,6 +352,8 @@ def main : IO UInt32 := do
       ("fmtFixedSpec", testFmtFixedSpec),
       ("fmtResult", testFmtResult),
       ("fmtComparison", testFmtComparison),
+      ("fmtComparison.multi", testFmtComparisonMulti),
+      ("fmtComparison.hashUnavailable", testFmtComparisonHashUnavailable),
       ("fmtFixedResult", testFmtFixedResult),
       ("fmtFixedComparison", testFmtFixedComparison),
       ("fmtVerifyReport.pass", testFmtVerifyPass),

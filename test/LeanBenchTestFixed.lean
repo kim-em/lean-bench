@@ -174,11 +174,11 @@ def testCompare : IO UInt32 := do
     return 1
   match report.agreeOnHash with
   | .allAgreed => pure ()
-  | .hashUnavailable =>
-    IO.eprintln "expected allAgreed (both benchmarks are Hashable)"
+  | .hashUnavailable unhashed =>
+    IO.eprintln s!"expected allAgreed (both benchmarks are Hashable); unhashed={unhashed.toList}"
     return 1
-  | .diverged entries =>
-    IO.eprintln s!"expected allAgreed, got divergence: {repr entries}"
+  | .diverged detail =>
+    IO.eprintln s!"expected allAgreed, got divergence: {repr detail}"
     return 1
   -- The formatter must surface the relative-timing line.
   let rendered := Format.fmtFixedComparison report

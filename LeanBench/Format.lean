@@ -257,6 +257,46 @@ def fmtFixedResult (r : FixedResult) : String := Id.run do
   lines := lines.push hashLine
   return "\n".intercalate lines.toList
 
+/-- `0xDEADBEEF` rendering for an `Option UInt64`; `—` when absent
+    (e.g. a function whose return type lacks `Hashable`, or a row
+    whose child died before emitting a hash). -/
+private def fmtOptHashHex : Option UInt64 → String
+  | none   => "—"
+  | some h => s!"0x{String.ofList (Nat.toDigits 16 h.toNat)}"
+
+/-- One indented line per compared function: `<name> hash=<hex>`,
+    annotated with how it relates to the baseline (the first entry
+    in `hashes`). Used by both parametric and fixed comparison
+    reporters so the layout stays consistent.
+
+    `dissenters` is the names whose hash differed from the
+    baseline's; everyone else is silently agreeing or has no hash to
+    compare. -/
+private def fmtHashTable
+    (hashes     : Array (Lean.Name × Option UInt64))
+    (dissenters : Array Lean.Name) : Array String := Id.run do
+  if hashes.isEmpty then return #[]
+  let baselineName : Lean.Name := hashes[0]!.1
+  let dissenterSet : Std.HashSet Lean.Name :=
+    dissenters.foldl (init := {}) (fun s n => s.insert n)
+  let nameStrs : Array String := hashes.map fun (n, _) => n.toString
+  let nameWidth :=
+    nameStrs.foldl (fun m s => max m s.length) 0
+  let mut lines : Array String := #[]
+  let mut i : Nat := 0
+  for (n, h) in hashes do
+    let suffix : String :=
+      if n == baselineName && !dissenters.isEmpty then
+        "    (baseline)"
+      else if dissenterSet.contains n then
+        s!"    differs from {baselineName}"
+      else ""
+    lines := lines.push <|
+      "    " ++ rightpad nameStrs[i]! nameWidth ++
+      "  hash=" ++ fmtOptHashHex h ++ suffix
+    i := i + 1
+  return lines
+
 /-- Render a fixed-benchmark comparison report: one block per
     function plus a relative-timing line and the hash-agreement
     summary. -/
@@ -286,11 +326,19 @@ def fmtFixedComparison (rep : FixedComparisonReport) : String := Id.run do
     | none =>
       lines := lines.push s!"relative median: baseline {baseline.function} has no successful repeats"
   | none => pure ()
-  let agreeStr := match rep.agreeOnHash with
-    | .allAgreed => "all functions agree on output"
-    | .hashUnavailable => "hash unavailable for one or more functions: cannot compare outputs"
-    | .diverged entries => s!"DIVERGED on {entries.size} (function, function) pairs"
-  lines := lines.push s!"agreement: {agreeStr}"
+  match rep.agreeOnHash with
+  | .allAgreed =>
+    lines := lines.push "agreement: all functions agree on output"
+  | .hashUnavailable unhashed =>
+    let names := String.intercalate ", " (unhashed.toList.map (·.toString))
+    lines := lines.push s!"agreement: cannot check — no Hashable instance for: {names}"
+    lines := lines.push "  (register a Hashable instance on the return type to enable comparison)"
+  | .diverged detail =>
+    lines := lines.push s!"agreement: DIVERGED — implementations disagree on output:"
+    for line in fmtHashTable detail.hashes detail.dissenters do
+      lines := lines.push line
+    lines := lines.push
+      "  (only result hashes are available; see doc/quickstart.md for what to expect)"
   return "\n".intercalate lines.toList
 
 /-- Render one verify report. Passing reports render as a single
@@ -349,7 +397,15 @@ def fmtCombinedVerify (r : CombinedVerifyReports) : String := Id.run do
   return "\n".intercalate lines.toList
 
 /-- Render a `ComparisonReport` as a per-function block list plus a
-    summary noting the common-param intersection. -/
+    summary noting the common-param intersection.
+
+    On divergence, the summary is structured to be debuggable: the
+    earliest common param with disagreement is named, every compared
+    function's hash at that param is laid out side-by-side, and
+    later-diverging params are listed compactly. The hash-only
+    output is what users see today; full result previews are not
+    yet recorded — see [`doc/quickstart.md`](../../doc/quickstart.md)
+    for what to expect when only hashes are available. -/
 def fmtComparison (rep : ComparisonReport) : String := Id.run do
   let mut lines : Array String := #[]
   for r in rep.results do
@@ -357,11 +413,28 @@ def fmtComparison (rep : ComparisonReport) : String := Id.run do
     lines := lines.push ""
   let common := rep.commonParams.toList.map toString
   lines := lines.push s!"common params (apples-to-apples): {String.intercalate ", " common}"
-  let agreeStr := match rep.agreeOnCommon with
-    | .allAgreed => "all functions agree on common params"
-    | .hashUnavailable => "no Hashable instance: cannot compare outputs"
-    | .divergedAt entries => s!"DIVERGED on {entries.size} (function, function, param) triples"
-  lines := lines.push s!"agreement: {agreeStr}"
+  match rep.agreeOnCommon with
+  | .allAgreed =>
+    lines := lines.push "agreement: all functions agree on common params"
+  | .hashUnavailable unhashed =>
+    let names := String.intercalate ", " (unhashed.toList.map (·.toString))
+    lines := lines.push s!"agreement: cannot check — no Hashable instance for: {names}"
+    lines := lines.push "  (register a Hashable instance on the return type to enable comparison)"
+  | .divergedAt details =>
+    let n := details.size
+    let plural := if n == 1 then "param" else "params"
+    let first := details[0]!
+    lines := lines.push <|
+      s!"agreement: DIVERGED on {n} {plural} — earliest divergence at param={first.param}:"
+    for line in fmtHashTable first.hashes first.dissenters do
+      lines := lines.push line
+    if details.size > 1 then
+      let later := details.extract 1 details.size
+      let laterParams := String.intercalate ", "
+        (later.toList.map (fun d => toString d.param))
+      lines := lines.push s!"  also diverged at: {laterParams}"
+    lines := lines.push
+      "  (only result hashes are available; see doc/quickstart.md for what to expect)"
   return "\n".intercalate lines.toList
 
 end Format

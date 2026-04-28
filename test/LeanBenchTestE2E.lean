@@ -171,6 +171,73 @@ def testCompareDiverges : IO UInt32 := do
     IO.eprintln s!"expected divergence, got {repr s}"
     return 1
 
+/-- Regression: `hashUnavailable` must key off the registered
+    `Hashable` flag, not the data. A hashable benchmark whose runs
+    all failed (every row is `error` / `killed_at_cap` with
+    `resultHash := none`) used to be misreported as
+    `hashUnavailable`, falsely pointing the user at the registration.
+    This test pipes a hand-crafted pair of "all-error" hashable
+    results through `computeAgreement` and asserts the result is
+    `allAgreed` (no observed divergence), not `hashUnavailable`. -/
+def testHashUnavailableIsRegistrationKeyed : IO UInt32 := do
+  -- Two hashable benchmarks whose every row is an error row with no
+  -- hash — same-shaped data both sides, so even if a buggy check
+  -- somehow read the row data it would not see divergence.
+  let errorPoint : DataPoint :=
+    { param := 1, innerRepeats := 0, totalNanos := 0
+    , perCallNanos := 0.0, resultHash := none
+    , status := .error "synthesised for test", partOfVerdict := true }
+  let mkResult (n : Lean.Name) : BenchmarkResult :=
+    { function := n
+    , complexityFormula := "n"
+    , hashable := true
+    , config := {}
+    , points := #[errorPoint]
+    , ratios := #[]
+    , verdict := .inconclusive
+    , cMin? := none
+    , cMax? := none
+    , verdictDroppedLeading := 0
+    , slope? := none
+    , spawnFloorNanos? := none }
+  let results : Array BenchmarkResult :=
+    #[mkResult `regressionA, mkResult `regressionB]
+  match computeAgreement results #[1] with
+  | .hashUnavailable names =>
+    IO.eprintln s!"REGRESSION: hashUnavailable fired on hashable benchmarks; names={names.toList}"
+    return 1
+  | .divergedAt _ =>
+    IO.eprintln "REGRESSION: divergence reported for matching empty data"
+    return 1
+  | .allAgreed => return 0
+
+/-- Sibling regression for fixed benchmarks: a hashable
+    fixed-benchmark with no successful repeats must not be reported
+    as `hashUnavailable`. -/
+def testFixedHashUnavailableIsRegistrationKeyed : IO UInt32 := do
+  let errorRepeat : FixedDataPoint :=
+    { repeatIndex := 0, totalNanos := 0, resultHash := none
+    , status := .error "synthesised for test" }
+  let mkResult (n : Lean.Name) : FixedResult :=
+    { function := n
+    , hashable := true
+    , config := {}
+    , points := #[errorRepeat]
+    , medianNanos? := none
+    , minNanos? := none
+    , maxNanos? := none
+    , hashesAgree := true }
+  let results : Array FixedResult :=
+    #[mkResult `fixedA, mkResult `fixedB]
+  match computeFixedAgreement results with
+  | .hashUnavailable names =>
+    IO.eprintln s!"REGRESSION: fixed hashUnavailable fired on hashable benchmarks; names={names.toList}"
+    return 1
+  | .diverged _ =>
+    IO.eprintln "REGRESSION: fixed divergence reported for empty data"
+    return 1
+  | .allAgreed => return 0
+
 def testCompareAgrees : IO UInt32 := do
   -- littleFn and littleFnTwin are byte-identical, so the comparison
   -- must report agreement.
@@ -227,7 +294,11 @@ def runTests : IO UInt32 := do
       ("runBenchmark.happy", testRunBenchmarkHappyPath),
       ("runBenchmark.unregistered", testRunBenchmarkUnregistered),
       ("compare.agrees", testCompareAgrees),
-      ("compare.diverges", testCompareDiverges) ]
+      ("compare.diverges", testCompareDiverges),
+      ("compare.hashUnavailableIsRegistrationKeyed",
+        testHashUnavailableIsRegistrationKeyed),
+      ("fixedCompare.hashUnavailableIsRegistrationKeyed",
+        testFixedHashUnavailableIsRegistrationKeyed) ]
   do
     let code ← t
     if code != 0 then

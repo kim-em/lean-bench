@@ -38,32 +38,46 @@ private def intersectParams (lists : Array (Array Nat)) : Array Nat := Id.run do
       acc := acc.push p
   return acc
 
-/-- Compute `agreeOnCommon` from the per-function results. -/
-private def computeAgreement
+/-- Compute `agreeOnCommon` from the per-function results.
+First-divergence-first: the earliest entry in `commonParams` where
+any pair disagrees becomes `details[0]`.
+
+The `hashUnavailable` test is registration-keyed (off
+`BenchmarkResult.hashable`), not data-keyed: a hashable benchmark
+whose runs all failed before emitting a hash is NOT misreported as
+"no Hashable instance" — that would falsely point the user at the
+registration when the real issue is the run.
+
+Exposed (not `private`) so the regression test for the
+registration-keyed Hashable check can drive it without needing a
+live registry. -/
+def computeAgreement
     (results : Array BenchmarkResult)
     (commonParams : Array Nat) :
     AgreementStatus := Id.run do
+  let unhashed : Array Lean.Name := results.filterMap fun r =>
+    if !r.hashable then some r.function else none
+  if !unhashed.isEmpty then return .hashUnavailable unhashed
   -- Build (function-name × Std.HashMap Nat (Option UInt64)) per result.
   let perFn : Array (Lean.Name × Std.HashMap Nat (Option UInt64)) := results.map fun r =>
     (r.function, r.points.foldl (fun m dp => m.insert dp.param dp.resultHash) {})
-  -- A function whose return type isn't Hashable will have all `none` hashes.
-  let anyNoHash := perFn.any fun (_, m) =>
-    m.toArray.all (fun (_, h) => h.isNone)
-  if anyNoHash then return .hashUnavailable
-  let mut diverged : Array (Lean.Name × Lean.Name × Nat) := #[]
+  let mut details : Array DivergenceDetail := #[]
   for p in commonParams do
     let hashes : Array (Lean.Name × Option UInt64) := perFn.map fun (n, m) => (n, m.get! p)
     -- Skip params where any function didn't produce a hash (e.g.
     -- killed at cap before emitting). That isn't divergence, just
     -- absence of data.
     if hashes.any (fun (_, h) => h.isNone) then continue
-    if hashes.size ≥ 2 then
-      let (n₀, h₀) := hashes[0]!
-      for i in [1:hashes.size] do
-        let (nᵢ, hᵢ) := hashes[i]!
-        if hᵢ != h₀ then
-          diverged := diverged.push (n₀, nᵢ, p)
-  if diverged.isEmpty then .allAgreed else .divergedAt diverged
+    if hashes.size < 2 then continue
+    let h₀ := hashes[0]!.2.get!
+    let mut dissenters : Array Lean.Name := #[]
+    for i in [1:hashes.size] do
+      let (nᵢ, hᵢ?) := hashes[i]!
+      if hᵢ?.get! != h₀ then
+        dissenters := dissenters.push nᵢ
+    if !dissenters.isEmpty then
+      details := details.push { param := p, hashes, dissenters }
+  if details.isEmpty then .allAgreed else .divergedAt details
 
 /-- Run a `compare` over the listed benchmarks. The same `override`
 applies to every benchmark in the comparison, so e.g.
@@ -83,28 +97,36 @@ def compare (names : List Lean.Name) (override : ConfigOverride := {}) :
 /-- Hash agreement across N fixed-benchmark results. For each
     function we take the *first* `ok` hash (intra-function
     consistency is recorded separately on `FixedResult.hashesAgree`).
-    Any function without a hash → `hashUnavailable`. Otherwise we
-    pairwise compare the first function's hash against each other's;
-    mismatches collect into a `diverged` list. -/
-private def computeFixedAgreement
+    The `hashUnavailable` test is registration-keyed (off
+    `FixedResult.hashable`) — a hashable benchmark whose every
+    repeat failed is NOT misreported as "no Hashable". When all
+    declared-hashable runs at least produced one hash row each, we
+    pairwise compare the first listed function's hash against the
+    rest and pack the result into a `FixedDivergenceDetail`. -/
+def computeFixedAgreement
     (results : Array FixedResult) : FixedAgreementStatus := Id.run do
+  let unhashed : Array Lean.Name := results.filterMap fun r =>
+    if !r.hashable then some r.function else none
+  if !unhashed.isEmpty then return .hashUnavailable unhashed
   let firstHashes : Array (Lean.Name × Option UInt64) := results.map fun r =>
     let h := r.points.findSome? fun dp =>
       match dp.status, dp.resultHash with
       | .ok, some h => some h
       | _,   _      => none
     (r.function, h)
-  if firstHashes.any (fun (_, h) => h.isNone) then return .hashUnavailable
   if firstHashes.size < 2 then return .allAgreed
-  let (n₀, h₀?) := firstHashes[0]!
-  let h₀ := h₀?.get!
-  let mut diverged : Array (Lean.Name × Lean.Name) := #[]
+  -- A hashable benchmark with no successful repeats has `none` here.
+  -- Treat that as "no comparable data" rather than divergence — falling
+  -- through to the divergence loop with `none` would crash on `.get!`.
+  if firstHashes.any (fun (_, h) => h.isNone) then return .allAgreed
+  let h₀ := firstHashes[0]!.2.get!
+  let mut dissenters : Array Lean.Name := #[]
   for i in [1:firstHashes.size] do
     let (nᵢ, hᵢ?) := firstHashes[i]!
-    let hᵢ := hᵢ?.get!
-    if hᵢ != h₀ then
-      diverged := diverged.push (n₀, nᵢ)
-  if diverged.isEmpty then .allAgreed else .diverged diverged
+    if hᵢ?.get! != h₀ then
+      dissenters := dissenters.push nᵢ
+  if dissenters.isEmpty then .allAgreed
+  else .diverged { hashes := firstHashes, dissenters }
 
 /-- Run a `compare` over fixed benchmarks. -/
 def compareFixed (names : List Lean.Name)

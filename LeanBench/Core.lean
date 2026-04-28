@@ -269,6 +269,12 @@ structure BenchmarkResult where
       source (e.g. `"2 ^ n"`). Echoed back in the result header so
       reports stay readable without needing the env around. -/
   complexityFormula : String
+  /-- True iff the function's return type has a `Hashable` instance —
+      mirrored from `BenchmarkSpec.hashable` so cross-result tooling
+      (`compare`, exporters) can distinguish "this benchmark has no
+      Hashable instance" from "this benchmark's runs all failed
+      before a hash was emitted". -/
+  hashable   : Bool := false
   config     : BenchmarkConfig
   points     : Array DataPoint
   ratios     : Array Ratio
@@ -290,11 +296,48 @@ structure BenchmarkResult where
   spawnFloorNanos? : Option Nat := none
   deriving Inhabited, Repr
 
-/-- Whether two functions in a `compare` agree on shared params. -/
+/-- One diverging param in a `compare`: the param at which results
+disagreed, the full hash table of each compared function at that
+param (in CLI argument order, so reports can render an "all
+implementations side-by-side" view), and the names of the
+implementations whose hash differed from the baseline (the first
+entry in `hashes`). -/
+structure DivergenceDetail where
+  /-- The shared param at which the disagreement was observed. -/
+  param      : Nat
+  /-- One entry per compared function, in the order the user passed
+      them on the command line. The hash is `Option UInt64` so
+      functions that produced no hash at this param (e.g. an early
+      `killed_at_cap` row) still appear in the table — the formatter
+      shows them as `hash=—` to make the absence visible. The first
+      entry is the comparison baseline. -/
+  hashes     : Array (Lean.Name × Option UInt64)
+  /-- Names of implementations whose hash at this param differed
+      from the baseline (the first entry in `hashes`). Today's
+      agreement check is baseline-pivoted so this is exactly what's
+      computed; if a future check moves to all-pairwise comparison
+      the format would extend to a richer relation. Functions whose
+      hash was absent at this param do NOT appear here — that's
+      data missing, not data disagreeing. -/
+  dissenters : Array Lean.Name
+  deriving Inhabited, Repr
+
+/-- Whether the implementations in a `compare` agree on shared
+params. The `divergedAt` payload preserves first-divergence order:
+`details[0]` is the earliest common param where any disagreement was
+observed, so reports can highlight it as the place to start
+debugging. -/
 inductive AgreementStatus
   | allAgreed
-  | divergedAt (entries : Array (Lean.Name × Lean.Name × Nat))
-  | hashUnavailable
+  /-- One entry per diverging param. The first entry is the earliest
+      common param (in `commonParams` order) where any pair of
+      implementations disagreed. -/
+  | divergedAt (details : Array DivergenceDetail)
+  /-- Hash agreement could not be checked because at least one
+      compared function's return type lacks a `Hashable` instance.
+      The payload names the offending functions so the user knows
+      which registration to fix. -/
+  | hashUnavailable (unhashed : Array Lean.Name)
   deriving Repr, Inhabited
 
 structure ComparisonReport where
@@ -400,6 +443,11 @@ structure FixedDataPoint where
 /-- Result of a single fixed-benchmark run. -/
 structure FixedResult where
   function   : Lean.Name
+  /-- True iff the registered value's underlying type has a
+      `Hashable` instance — mirrored from `FixedSpec.hashable`. Same
+      role as on `BenchmarkResult`: distinguishes "no Hashable" from
+      "no successful repeat" in `compare` reporting. -/
+  hashable   : Bool := false
   config     : FixedBenchmarkConfig
   points     : Array FixedDataPoint
   /-- Median wall time across `ok` repeats (ns). `none` if no
@@ -415,11 +463,32 @@ structure FixedResult where
   hashesAgree  : Bool
   deriving Inhabited, Repr
 
-/-- Whether two fixed benchmarks in a `compare` agree on output. -/
+/-- A single fixed-benchmark divergence record: the per-function
+hash table (one entry per compared function, CLI argument order)
+plus the explicit list of disagreeing pairs against the first
+implementation. Mirrors `DivergenceDetail` minus the `param` field —
+fixed benchmarks have no parameter sweep. -/
+structure FixedDivergenceDetail where
+  /-- One entry per compared function, in CLI argument order. The
+      hash is the function's *first* `ok` repeat hash (intra-function
+      consistency across repeats is recorded separately on
+      `FixedResult.hashesAgree`). `none` if the function produced no
+      `ok` repeat with a hash. The first entry is the comparison
+      baseline. -/
+  hashes     : Array (Lean.Name × Option UInt64)
+  /-- Names of implementations whose first-`ok` hash differed from
+      the baseline. -/
+  dissenters : Array Lean.Name
+  deriving Inhabited, Repr
+
+/-- Whether the implementations in a fixed `compare` agree on
+output. -/
 inductive FixedAgreementStatus
   | allAgreed
-  | diverged (entries : Array (Lean.Name × Lean.Name))
-  | hashUnavailable
+  | diverged (detail : FixedDivergenceDetail)
+  /-- At least one function's return type lacks `Hashable`. The
+      payload names the offending functions. -/
+  | hashUnavailable (unhashed : Array Lean.Name)
   deriving Repr, Inhabited
 
 structure FixedComparisonReport where

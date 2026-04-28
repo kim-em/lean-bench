@@ -139,6 +139,7 @@ def summarize
       spec.config.slopeTolerance spec.config.narrowRangeNoiseFloor
   { function := spec.name
   , complexityFormula := spec.complexityFormula
+  , hashable := spec.hashable
   , config := spec.config
   , points
   , ratios
