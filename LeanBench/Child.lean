@@ -129,7 +129,15 @@ def emitRow
     (cacheMode : CacheMode := .warm)
     (errorMsg? : Option String := none) :
     IO Unit := do
-  let perCall : Float := totalNanos.toFloat / innerRepeats.toFloat
+  -- Synthesized error / "unregistered benchmark" rows pass
+  -- `innerRepeats := 0`, which would naively render as `0/0 = NaN`.
+  -- `NaN` is not valid JSON (`Lean.Json.parse` rejects it), so we
+  -- emit `null` for the derived field and leave the consumer to
+  -- treat absence as `null` per the schema contract. Real
+  -- measurement rows always have `innerRepeats ≥ 1`.
+  let perCallStr : String :=
+    if innerRepeats == 0 then "null"
+    else toString (totalNanos.toFloat / innerRepeats.toFloat)
   let row :=
     "{" ++ String.intercalate "," [
       s!"\"schema_version\":{Schema.schemaVersion}",
@@ -138,7 +146,7 @@ def emitRow
       s!"\"param\":{param}",
       s!"\"inner_repeats\":{innerRepeats}",
       s!"\"total_nanos\":{totalNanos}",
-      s!"\"per_call_nanos\":{perCall}",
+      s!"\"per_call_nanos\":{perCallStr}",
       s!"\"cache_mode\":{jsonStr cacheMode.toJsonString}",
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
@@ -170,11 +178,17 @@ def emitRow
     behave identically — only the iteration count and timing strategy
     differ. -/
 def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
-    (cacheMode : CacheMode := .warm) : IO UInt32 := do
+    (cacheMode : CacheMode := .warm) (env? : Option Env := none) : IO UInt32 := do
   -- Capture env *before* dispatching: we want a row even for the
   -- "unregistered benchmark" failure case, and that row needs an
-  -- `env` field per the schema contract.
-  let env ← RunEnv.capture
+  -- `env` field per the schema contract. When the parent passed
+  -- `--env-json`, we use that snapshot instead — it keeps every
+  -- row in a single run stamped with identical env (consistent
+  -- timestamps, hostname, git_dirty), and skips ~3 subprocess
+  -- spawns per ladder rung.
+  let env ← match env? with
+    | some env => pure env
+    | none     => RunEnv.capture
   match ← findRuntimeEntry benchName with
   | none =>
     emitRow benchName param 0 0 none
@@ -239,8 +253,11 @@ def emitFixedRow
     name up in the fixed runtime registry, performs one timed
     invocation, emits one JSONL row, exits 0 on success or 1 on
     error. -/
-def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat) : IO UInt32 := do
-  let env ← RunEnv.capture
+def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat)
+    (env? : Option Env := none) : IO UInt32 := do
+  let env ← match env? with
+    | some env => pure env
+    | none     => RunEnv.capture
   match ← findFixedRuntimeEntry benchName with
   | none =>
     emitFixedRow benchName repeatIndex 0 none

@@ -42,7 +42,9 @@ structure Env where
       empty string verbatim rather than fabricating a `null`. -/
   platformTarget    : String
   /-- Coarse OS family: `"linux"` / `"macos"` / `"windows"` /
-      `"emscripten"` / `"unknown"`. -/
+      `"emscripten"`. The detector defaults to `"linux"` for any
+      non-{Windows, macOS, Emscripten} platform; readers should
+      treat this as informational, not authoritative. -/
   os                : String
   /-- Architecture parsed from the target triple's leading segment
       (`"x86_64"`, `"aarch64"`, …). `none` when the triple is empty

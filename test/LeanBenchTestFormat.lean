@@ -343,6 +343,77 @@ def testFmtVerifyMulti : IO UInt32 := do
     "1 of 2 benchmark(s) failed verification"
   snapshot "fmtVerify.multi" expected (Format.fmtVerify #[pass, fail])
 
+/-! ## Env summary in reports (issue #11)
+
+Pin the one-line `env: ...` summary that lands under the report
+header and at the top of comparison reports. Done with a fixed
+`Env` fixture so the test is deterministic — `RunEnv.capture` would
+be host-dependent. -/
+
+private def sampleEnv : Env :=
+  { leanVersion := "4.30.0-rc2"
+  , leanToolchain := "leanprover/lean4:v4.30.0-rc2"
+  , platformTarget := "x86_64-unknown-linux-gnu"
+  , os := "linux"
+  , arch := some "x86_64"
+  , cpuModel := some "Test CPU"
+  , cpuCores := some 8
+  , hostname := some "test-host"
+  , exeName := "test-exe"
+  , leanBenchVersion := "0.1.0"
+  , gitCommit := some "deadbeefcafef00d1234567890abcdef12345678"
+  , gitDirty := some false
+  , timestampUnixMs := 1714316040000
+  , timestampIso := "2026-04-28T12:34:00Z" }
+
+def testFmtResultWithEnv : IO UInt32 := do
+  let withEnv : BenchmarkResult := { sampleResult with env? := some sampleEnv }
+  let expected :=
+    "Sample.linearFn    expected complexity: n    [warm cache]\n" ++
+    "  env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=deadbee, " ++
+    "2026-04-28T12:34:00Z, host=test-host\n" ++
+    "  param  per-call    repeats  C\n" ++
+    "      2   25.000 ns  ×2^2     C=12.500\n" ++
+    "      4   50.000 ns  ×2^2     C=12.500\n" ++
+    "      8  100.000 ns  ×2^2     C=12.500\n" ++
+    "  verdict: consistent with declared complexity (cMin=12.500, cMax=12.500, β=+0.000)"
+  snapshot "fmtResult.withEnv" expected (Format.fmtResult withEnv)
+
+def testFmtComparisonWithEnv : IO UInt32 := do
+  -- Compare report should print env exactly *once* at the top, even
+  -- though both child results carry their own env? snapshot.
+  let withEnv1 : BenchmarkResult := { sampleResult with env? := some sampleEnv }
+  let withEnv2 : BenchmarkResult := { sampleResult2 with env? := some sampleEnv }
+  let rep : ComparisonReport :=
+    { sampleComparison with results := #[withEnv1, withEnv2] }
+  let formatted := Format.fmtComparison rep
+  -- Header line must appear exactly once.
+  let envLine :=
+    "env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=deadbee, " ++
+    "2026-04-28T12:34:00Z, host=test-host"
+  let parts := formatted.splitOn envLine
+  if parts.length != 2 then
+    IO.eprintln s!"fmtComparison.withEnv: expected env line exactly once, got {parts.length - 1} occurrences"
+    IO.eprintln formatted
+    return 1
+  -- And the env line must be the first line (top of comparison).
+  unless formatted.startsWith envLine do
+    IO.eprintln "fmtComparison.withEnv: env line must be at the top of the comparison"
+    IO.eprintln formatted
+    return 1
+  return 0
+
+def testFmtFixedResultWithEnv : IO UInt32 := do
+  let withEnv : FixedResult := { sampleFixedResult with env? := some sampleEnv }
+  let formatted := Format.fmtFixedResult withEnv
+  let envLine :=
+    "  env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=deadbee, " ++
+    "2026-04-28T12:34:00Z, host=test-host"
+  unless formatted.splitOn "\n" |>.contains envLine do
+    IO.eprintln s!"fmtFixedResult.withEnv: missing env summary line\n{formatted}"
+    return 1
+  return 0
+
 def testFmtCombinedVerify : IO UInt32 := do
   let pParam : VerifyReport := { spec := sampleSpec, checks := #[] }
   let fFixed : FixedVerifyReport :=
@@ -376,7 +447,10 @@ def main : IO UInt32 := do
       ("fmtVerifyReport.pass", testFmtVerifyPass),
       ("fmtVerifyReport.fail", testFmtVerifyFail),
       ("fmtVerify.multi", testFmtVerifyMulti),
-      ("fmtCombinedVerify", testFmtCombinedVerify) ]
+      ("fmtCombinedVerify", testFmtCombinedVerify),
+      ("fmtResult.withEnv", testFmtResultWithEnv),
+      ("fmtComparison.withEnv", testFmtComparisonWithEnv),
+      ("fmtFixedResult.withEnv", testFmtFixedResultWithEnv) ]
   do
     let code ← t
     if code != 0 then

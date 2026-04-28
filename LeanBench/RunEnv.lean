@@ -34,9 +34,12 @@ namespace RunEnv
 
 /-! ## OS / arch derivation -/
 
-/-- Coarse OS family from `System.Platform`. `"unknown"` falls
-through every platform check rather than a partial match — readers
-should treat the value as informational, not authoritative. -/
+/-- Coarse OS family from `System.Platform`. We default to
+`"linux"` because every non-Windows / non-macOS / non-Emscripten
+platform Lean's process API actually supports today is a
+Linux-flavored Unix; the field is informational, and a more
+specific probe (e.g. distinguishing FreeBSD) would belong in a
+later metadata revision. -/
 def detectOs : String :=
   if System.Platform.isWindows then "windows"
   else if System.Platform.isOSX then "macos"
@@ -269,6 +272,48 @@ def toJson (e : Env) : Json :=
     ("timestamp_unix_ms",  Json.num (.fromInt e.timestampUnixMs)),
     ("timestamp_iso",      Json.str e.timestampIso)
   ]
+
+/-! ## JSON decoding (for `--env-json` plumbing)
+
+The parent captures env once and passes the rendered JSON to each
+child via the `--env-json` flag, so children don't independently
+re-shell-out to `git` / `hostname` per ladder rung. The child reads
+the flag, parses with `fromJson`, and emits the row verbatim. -/
+
+/-- Decode an `Env` from a JSON object. Tolerates missing fields by
+filling in `Inhabited` defaults — callers are expected to validate
+upstream (the JSON came from a sibling `RunEnv.toJson` call) so
+this is loose on input by design. The schema doc's "tolerate
+missing keys as null" carve-out applies here too. -/
+def fromJson (j : Json) : Except String Env := do
+  -- For optional fields we accept either `null`, an absent key, or
+  -- a value of the right type. `getObjValAs?` returns `.error` for
+  -- both absence and type mismatch; we collapse both to `none`.
+  let getOptStr (k : String) : Option String :=
+    match j.getObjValAs? String k with | .ok s => some s | .error _ => none
+  let getOptNat (k : String) : Option Nat :=
+    match j.getObjValAs? Nat k with | .ok n => some n | .error _ => none
+  let getOptBool (k : String) : Option Bool :=
+    match j.getObjValAs? Bool k with | .ok b => some b | .error _ => none
+  let leanVersion ← j.getObjValAs? String "lean_version"
+  let leanToolchain ← j.getObjValAs? String "lean_toolchain"
+  let platformTarget ← j.getObjValAs? String "platform_target"
+  let os ← j.getObjValAs? String "os"
+  let exeName ← j.getObjValAs? String "exe_name"
+  let leanBenchVersion ← j.getObjValAs? String "lean_bench_version"
+  let timestampUnixMs ← j.getObjValAs? Int "timestamp_unix_ms"
+  let timestampIso ← j.getObjValAs? String "timestamp_iso"
+  return {
+    leanVersion, leanToolchain, platformTarget, os
+    arch              := getOptStr  "arch"
+    cpuModel          := getOptStr  "cpu_model"
+    cpuCores          := getOptNat  "cpu_cores"
+    hostname          := getOptStr  "hostname"
+    exeName, leanBenchVersion
+    gitCommit         := getOptStr  "git_commit"
+    gitDirty          := getOptBool "git_dirty"
+    timestampUnixMs, timestampIso
+  }
 
 /-! ## Concise human-readable summary -/
 
