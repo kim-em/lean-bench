@@ -188,20 +188,39 @@ What you see in the report when `outerTrials > 1`:
   not the per-trial ratio — that's deliberate, the verdict cares
   about per-param consistency, not per-trial scatter.
 - A `trial summaries` block after the verdict lists one line per
-  ok param with median, min, max, and `spread = (max - min) / median`.
-  A spread of `2.0%` is a tight cluster; `80.0%` is unreliable and
-  worth investigating (CPU thermals, GC pressure, neighbour load).
+  **verdict-eligible** param (i.e. params that contributed to the
+  slope fit) with median, min, max, and
+  `spread = (max - min) / median`. A spread of `2.0%` is a tight
+  cluster; `80.0%` is unreliable and worth investigating (CPU
+  thermals, GC pressure, neighbour load). Doubling-probe rows in
+  `.linear` mode and rows below the signal floor are excluded from
+  the summary, matching what the verdict reduction sees, so the
+  block reflects the same data the verdict was computed from.
 
 What the verdict does with multiple trials:
 
-- The slope fit and `cMin/cMax` range check both see one robust
-  median per param, not `N` co-located samples per param. So
-  `--outer-trials 5` does **not** make the slope tolerance look
-  artificially tight by inflating sample count; it just gives you
-  a more trustworthy median.
+- The slope fit and `cMin/cMax` range check see one median per
+  verdict-eligible param, not `N` co-located samples that would
+  pseudo-replicate the rung and overweight it. Bumping
+  `--outer-trials 5` does **not** artificially tighten the slope
+  fit by inflating the apparent sample count; it just gives you a
+  more trustworthy median per rung.
 - Trials that fail (timed out, killed at cap, errored) don't enter
   the median — the `okCount` field on each `TrialSummary` says how
-  many of the configured trials actually contributed.
+  many of the configured trials actually contributed. With
+  `okCount = 1` (only one trial survived) the median is just that
+  one observation; with `okCount = 0` the param is dropped entirely
+  rather than appearing as a median of nothing.
+- The sweep no longer terminates on a flaky single trial. As long
+  as at least one trial at a rung succeeds, the ladder progresses;
+  the rung is treated as "failed" only when *every* configured
+  trial at that rung errors / times out / hits the cap.
+- In `.linear` ladder mode the doubling probe runs one trial per
+  rung regardless of `outerTrials`, since probe rows are
+  bracket-finding only and never enter the verdict reduction. In
+  `.doubling` mode every probe rung that succeeded is topped up to
+  the full `outerTrials` cluster after the probe completes, so the
+  verdict sees the same trial count at every rung.
 
 What this is not:
 

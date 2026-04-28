@@ -400,11 +400,15 @@ can read at a glance.
 Issue #4. -/
 structure TrialSummary where
   param          : Nat
-  /-- Number of `ok` trials that contributed to the summary. Trials
-      that timed out / were killed / errored are not counted; the
-      summary may have `okCount < BenchmarkConfig.outerTrials`. `0`
-      should not occur — the harness emits a `TrialSummary` only when
-      at least one trial succeeded. -/
+  /-- Number of verdict-eligible `ok` trials that contributed to the
+      summary. Trials that timed out / were killed / errored are not
+      counted, and neither are doubling-probe rows in `.linear`
+      mode (`partOfVerdict := false`) nor rows that fell below the
+      signal floor (`belowSignalFloor := true`); the summary covers
+      the same row set as `Stats.ratiosFromPoints`. The summary may
+      have `okCount < BenchmarkConfig.outerTrials`; `0` should not
+      occur because the harness emits a `TrialSummary` only when at
+      least one trial survived all of those filters. -/
   okCount        : Nat
   /-- Median of `perCallNanos` over the `okCount` trials. Upper
       middle on even sample counts (matches `Stats.medianFloat`). -/
@@ -492,14 +496,19 @@ structure BenchmarkResult where
       layer renders these as a hint section after the verdict line.
       Issue #15. -/
   advisories : Array Advisory := #[]
-  /-- One entry per param that produced at least one `ok` trial, in
-      ladder order. With `outerTrials := 1` (the v0.1 default) each
-      entry trivially has `okCount = 1` and `relativeSpread = 0.0`;
-      with `outerTrials > 1` the entry summarises the cluster of
+  /-- One entry per **verdict-eligible** param, in ladder order — the
+      same param set `Stats.ratiosFromPoints` returns. Doubling-probe
+      rows in `.linear` mode and rows below the signal floor are
+      excluded both here and from the verdict reduction, so this
+      array reflects exactly the data the verdict was computed from.
+      With `outerTrials := 1` (the v0.1 default) each entry trivially
+      has `okCount = 1` and `relativeSpread = 0.0`; with
+      `outerTrials > 1` the entry summarises the cluster of
       independent measurements at that param (median / min / max /
-      spread). The verdict ratios are computed from `medianPerCallNanos`
-      so a single noisy trial doesn't shift the slope fit. The full
-      per-trial points stay on `points` for downstream tooling and
+      spread). The verdict ratios are computed from
+      `medianPerCallNanos` so a single noisy trial doesn't shift the
+      slope fit. The full per-trial points (including probe and
+      below-floor rows) stay on `points` for downstream tooling and
       raw inspection. Issue #4. -/
   trialSummaries : Array TrialSummary := #[]
   deriving Inhabited, Repr

@@ -76,12 +76,12 @@ def testMedianFloatOdd : IO UInt32 := do
     return 1
   return 0
 
-def testMedianFloatEvenUpperMiddle : IO UInt32 := do
-  -- Upper middle on even: index 2 of [1,2,3,4] is 3.0.
+def testMedianFloatEvenMeanOfMiddles : IO UInt32 := do
+  -- Mean of two middles on even: (2 + 3) / 2 = 2.5.
   let xs : Array Float := #[4.0, 1.0, 3.0, 2.0]
   let m := Stats.medianFloat xs
-  unless m == 3.0 do
-    IO.eprintln s!"median even: expected 3.0 (upper middle), got {m}"
+  unless m == 2.5 do
+    IO.eprintln s!"median even: expected 2.5 (mean of two middles), got {m}"
     return 1
   return 0
 
@@ -113,17 +113,18 @@ def testRatiosUseMedianAcrossTrials : IO UInt32 := do
   unless rs[0]!.2 == 50.0 do
     IO.eprintln s!"expected ratio at 4 to be 50.0, got {rs[0]!.2}"
     return 1
-  -- Even-length cluster at 8: upper middle of (350, 450) = 450; ratio
-  -- 450/8 = 56.25.
+  -- Even-length cluster at 8: mean of (350, 450) = 400; ratio
+  -- 400/8 = 50.
   expectEq "ratios.1.param" rs[1]!.1 8
-  unless rs[1]!.2 == 56.25 do
-    IO.eprintln s!"expected ratio at 8 to be 56.25 (upper-middle median), got {rs[1]!.2}"
+  unless rs[1]!.2 == 50.0 do
+    IO.eprintln s!"expected ratio at 8 to be 50.0 (mean-of-middles median), got {rs[1]!.2}"
     return 1
   return 0
 
 def testRatiosSkipNonOkTrials : IO UInt32 := do
-  -- A failed trial at param=4 must not count toward the median: median
-  -- of just (100, 300) — the two ok trials — is 300 (upper middle).
+  -- A failed trial at param=4 must not count toward the median:
+  -- median of just (100, 300) — the two ok trials — is 200 (mean
+  -- of the two middles, since okCount drops to 2).
   let pts : Array DataPoint := #[
     mkOk 4 100.0 (trial := 0),
     { param := 4, innerRepeats := 0, totalNanos := 0, perCallNanos := 0.0
@@ -131,9 +132,9 @@ def testRatiosSkipNonOkTrials : IO UInt32 := do
     mkOk 4 300.0 (trial := 2) ]
   let rs := Stats.ratiosFromPoints (fun n => n) pts
   expectEq "ratios.size after skip" rs.size 1
-  -- 300 / 4 = 75.0
-  unless rs[0]!.2 == 75.0 do
-    IO.eprintln s!"expected ratio 75.0 (median of ok trials only), got {rs[0]!.2}"
+  -- 200 / 4 = 50.0
+  unless rs[0]!.2 == 50.0 do
+    IO.eprintln s!"expected ratio 50.0 (median of ok trials only), got {rs[0]!.2}"
     return 1
   return 0
 
@@ -293,7 +294,7 @@ def runTests : IO UInt32 := do
   let mut anyFail : UInt32 := 0
   for (label, t) in
     [ ("median.odd", testMedianFloatOdd),
-      ("median.evenUpperMiddle", testMedianFloatEvenUpperMiddle),
+      ("median.evenMeanOfMiddles", testMedianFloatEvenMeanOfMiddles),
       ("median.empty", testMedianFloatEmpty),
       ("ratios.medianAcrossTrials", testRatiosUseMedianAcrossTrials),
       ("ratios.skipNonOk", testRatiosSkipNonOkTrials),

@@ -300,11 +300,20 @@ private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
 
 /-- Run a single rung, taking `trials` independent outer measurements.
     Each call to `runOneBatch` is one fresh child spawn; per-trial
-    points are tagged with `trialIndex` 0..trials-1. If the first
-    trial at this rung fails (timed out / killed / errored) we stop
-    immediately rather than re-spawning at a known-bad rung — the
-    one failed row is enough for `lastOk` / `firstFail` bracketing
-    and for the user-facing report. Issue #4. -/
+    points are tagged with `trialIndex` 0..trials-1.
+
+    Always runs all `trials` spawns regardless of intermediate
+    failures: a transient first-trial timeout shouldn't poison the
+    whole rung's data (Codex flagged this as a stability regression
+    when `outerTrials > 1`). The ladder-continuation decision is
+    made by the caller from `rung.any (·.status == .ok)`, so a
+    rung whose first trial flaked but later trials succeeded is
+    still treated as `lastOk`-eligible.
+
+    Cost is bounded: each spawn is independently capped by
+    `maxSecondsPerCall`, so the worst case at a known-cap rung is
+    `trials × maxSecondsPerCall`. Users opted into that cost when
+    they bumped `outerTrials`. Issue #4. -/
 private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
     (trials : Nat) : IO (Array DataPoint) := do
   let mut acc : Array DataPoint := #[]
@@ -312,8 +321,14 @@ private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
   for i in [0 : trials] do
     let dp ← runOneBatch spec param
     acc := acc.push { dp with trialIndex := i }
-    if dp.status != .ok then break
   return acc
+
+/-- Did any trial at this rung succeed? Drives the ladder-continuation
+    decision: the rung counts as `ok` for `lastOk` / sweep-progress as
+    long as at least one of its `outerTrials` measurements landed.
+    Issue #4. -/
+private def rungAnyOk (rung : Array DataPoint) : Bool :=
+  rung.any (fun dp => dp.status == .ok)
 
 /-- Run the static doubling ladder. Returns `(points, lastOk?, firstFail?)`:
 
@@ -322,11 +337,22 @@ private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
 - `firstFail?` is the first param after `lastOk` whose status was non-ok
   (none if the ladder ran to ceiling without failing).
 
-Each rung runs `cfg.outerTrials` independent measurements; the rung's
-status for the bracket-finding decision is the status of the *first*
-trial (i.e. if the first trial succeeds we keep going; if it fails
-the rung is the bracket boundary, regardless of whether later trials
-would have succeeded — which they shouldn't, given the first failed).
+In `.linear` mode the doubling probe exists only to find the
+productive band — its rows get `partOfVerdict := false` later and
+never enter the verdict reduction. So the probe runs **one trial per
+rung** regardless of `outerTrials`: there is no statistical value in
+spending `outerTrials × probeRungs` spawns on rows the verdict will
+discard. Codex flagged this as wasted cost for `--outer-trials 5
+--param-schedule linear`. The verdict-eligible sweep rungs (added
+later by `runBenchmark`) still run the full `outerTrials` cluster.
+
+In `.doubling` mode every probe rung also enters the verdict, so
+running `outerTrials` per rung does matter — but we still only do
+one trial here; `runBenchmark` runs the remaining `outerTrials - 1`
+trials at every probe rung that survived in a second pass below
+(see `topUpDoublingTrials`). That keeps the bracket-finding cost at
+`O(ladder)` regardless of `outerTrials` while preserving the median
+trial cluster on the rungs that count.
 
 Probe rows are returned with whatever `partOfVerdict` `runOneBatch`
 chose (defaults to true); the caller flips them as needed. -/
@@ -338,14 +364,42 @@ private def runDoublingProbe (spec : BenchmarkSpec) :
   let mut firstFail : Option Nat := none
   for param in ladder do
     if firstFail.isSome then break
-    let rung ← runRungTrials spec param spec.config.outerTrials
+    -- Probe runs one trial per rung — see the docstring rationale.
+    let rung ← runRungTrials spec param 1
     points := points ++ rung
-    -- The first trial decides the bracket: subsequent trials at this
-    -- rung are aggregate evidence, not bracket-finding evidence.
-    match rung[0]!.status with
-    | .ok => lastOk := some param
-    | _   => firstFail := some param
+    if rungAnyOk rung then lastOk := some param
+    else firstFail := some param
   return (points, lastOk, firstFail)
+
+/-- After the doubling probe, top up the trials at every successful
+    probe rung so each verdict-eligible param ends up with
+    `outerTrials` measurements. Only called in `.doubling` mode (where
+    probe rows ARE the verdict data); in `.linear` mode probe rows are
+    demoted to `partOfVerdict := false` and the linear sweep provides
+    the trial cluster on its own.
+
+    Trials added here are tagged with `trialIndex` 1..outerTrials-1
+    (the probe contributed index 0). If a top-up trial fails, it still
+    gets recorded — we want the user to see the flake rather than have
+    it silently dropped — but it doesn't change `lastOk`/`firstFail`
+    since those were settled by the probe. Issue #4. -/
+private def topUpDoublingTrials (spec : BenchmarkSpec)
+    (probePoints : Array DataPoint) : IO (Array DataPoint) := do
+  let extraTrials := spec.config.outerTrials - 1
+  if extraTrials == 0 then return probePoints
+  -- Distinct ok params in probe order.
+  let mut seen : Std.HashSet Nat := {}
+  let mut okParams : Array Nat := #[]
+  for dp in probePoints do
+    if dp.status == .ok && !seen.contains dp.param then
+      seen := seen.insert dp.param
+      okParams := okParams.push dp.param
+  let mut acc := probePoints
+  for p in okParams do
+    for i in [0 : extraTrials] do
+      let dp ← runOneBatch spec p
+      acc := acc.push { dp with trialIndex := i + 1 }
+  return acc
 
 /-- Resolve `.auto` to either `.doubling` or a sensible `.linear`.
     `.custom` and the explicit shapes pass through unchanged. -/
@@ -440,32 +494,32 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
     for n in params do
       let rung ← runRungTrials spec n cfg.outerTrials
       points := points ++ rung
-      if rung[0]!.status != .ok then break
+      -- Stop the ladder only when EVERY trial at this rung failed.
+      -- A transient first-trial timeout no longer poisons the rest
+      -- of the schedule (Codex review).
+      unless rungAnyOk rung do break
   | _ =>
     let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
     points := probePoints
     match schedule with
-    | .doubling => pure ()
+    | .doubling =>
+      -- Probe rows ARE the verdict data here. Top up every successful
+      -- probe rung to `outerTrials` measurements.
+      points ← topUpDoublingTrials spec points
     | .custom _ => pure ()  -- unreachable in this branch
     | .auto => pure ()  -- unreachable after resolveSchedule
     | .linear samples =>
       match lastOk?, firstFail? with
       | some lastOk, some firstFail =>
-        -- Tighten the bracket using the complexity model + observed
-        -- cost at `lastOk`. Use the median of the trial cluster at
-        -- `lastOk` so a single noisy probe trial doesn't shift the
-        -- extrapolation. With outerTrials = 1 this is just the one
-        -- observed perCallNanos.
-        let lastOkPerCalls : Array Float :=
-          probePoints.filterMap fun dp =>
-            if dp.param == lastOk && dp.status == .ok then
-              some dp.perCallNanos
-            else none
+        -- The probe ran one trial per rung; for the bracket-tightening
+        -- extrapolation use that single perCallNanos directly. (No
+        -- median needed because there's no cluster yet — the cluster
+        -- is built later by the sweep.)
         let lastOkPerCall : Float :=
-          if lastOkPerCalls.isEmpty then 0.0
-          else
-            let sorted := lastOkPerCalls.qsort (· < ·)
-            sorted[sorted.size / 2]!
+          (probePoints.findSome? fun dp =>
+              if dp.param == lastOk && dp.status == .ok then
+                some dp.perCallNanos
+              else none).getD 0.0
         let capNanos : Float := cfg.maxSecondsPerCall * 1.0e9
         let effFirstFail :=
           estimateFirstFail entry.complexity lastOk lastOkPerCall
@@ -478,12 +532,13 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
           for n in rungs do
             let rung ← runRungTrials spec n cfg.outerTrials
             points := points ++ rung
-            if rung[0]!.status != .ok then break
+            -- Stop the sweep only when EVERY trial at this rung failed.
+            unless rungAnyOk rung do break
       | _, _ =>
         -- No bracket (doubling ran clean to ceiling, or first rung failed).
-        -- Fall back to doubling-only — probe rows already have
-        -- `partOfVerdict := true`.
-        pure ()
+        -- Fall back to doubling-only — top up trials so the verdict
+        -- cluster is the full configured size.
+        points ← topUpDoublingTrials spec points
   let spawnFloor ← measureSpawnFloor
   -- Annotate below-floor rows BEFORE summarising so the verdict
   -- ratios and the advisory list see the same filtered view.

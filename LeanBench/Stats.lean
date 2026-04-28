@@ -21,13 +21,24 @@ namespace Stats
     any pre-filtering (we don't know what 'invalid' means here).
     Returns `0.0` on an empty array — callers should check before
     calling and skip the param entirely if no usable data exists.
-    Upper-middle on even sample counts to match `Run.medianNat`'s
-    convention (conservative for regression flagging). -/
+
+    Standard textbook median: odd `size` → middle element; even
+    `size` → mean of the two middle elements. Codex flagged the
+    earlier upper-middle variant as a systematic upward bias when
+    `okCount` happens to be even (a real possibility once failures
+    or floor-filtering knock trials out of the cluster). Mean-of-
+    middles is unbiased under any symmetric noise distribution and
+    matches what users expect when they read "median" in the
+    report. -/
 def medianFloat (xs : Array Float) : Float :=
   if xs.isEmpty then 0.0
   else
     let sorted := xs.qsort (· < ·)
-    sorted[sorted.size / 2]!
+    let n := sorted.size
+    if n % 2 == 1 then
+      sorted[n / 2]!
+    else
+      (sorted[n / 2 - 1]! + sorted[n / 2]!) / 2.0
 
 /-- Verdict-eligible per-call timings at `param` from `points`. Skips
     rows that error / time out / are doubling-probe rows / are below
