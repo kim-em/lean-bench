@@ -7,6 +7,11 @@ Search for a target in a sorted array of length `n`. Both
 implementations get the same input shape; binary search is `log n`
 and linear scan is `n`. Compare them to see the harness's verdict
 catch the asymptotic difference.
+
+This example also demonstrates `with prep := …`. The array
+construction is `O(n)`, which would dominate any `O(log n)` search if
+it ran inside the timing loop. We register `prepInput` to build the
+`(array, target)` pair once per param, outside the inner loop.
 -/
 
 namespace LeanBench.Examples.BinarySearch
@@ -41,20 +46,23 @@ def linearScan (a : Array Nat) (target : Nat) : Option Nat := Id.run do
     if a[i]! ≤ target then result := some i
   return result
 
-def runBinary (n : Nat) : Nat :=
-  let a := mkArr n
-  let target := (n.max 1 - 1) * 7 / 2
-  (bsearch a target).getD 0
+/-- Per-param setup: build the sorted array and the search target. -/
+def prepInput (n : Nat) : Array Nat × Nat :=
+  (mkArr n, (n.max 1 - 1) * 7 / 2)
 
-def runLinear (n : Nat) : Nat :=
-  let a := mkArr n
-  let target := (n.max 1 - 1) * 7 / 2
-  (linearScan a target).getD 0
+def runBinary (input : Array Nat × Nat) : Nat :=
+  (bsearch input.1 input.2).getD 0
+
+def runLinear (input : Array Nat × Nat) : Nat :=
+  (linearScan input.1 input.2).getD 0
 
 setup_benchmark runBinary n => Nat.log2 (n + 1)
+  with prep := prepInput
 setup_benchmark runLinear n => n
+  with prep := prepInput
 
 end LeanBench.Examples.BinarySearch
 
 def main (args : List String) : IO UInt32 :=
   LeanBench.Cli.dispatch args
+

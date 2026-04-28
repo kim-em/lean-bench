@@ -73,12 +73,24 @@ def allSpecs (env : Environment) : Array BenchmarkSpec :=
     function and its complexity model. -/
 structure RuntimeEntry where
   spec       : BenchmarkSpec
-  /-- Runs the function under test `count` times at parameter `param`,
-      then returns the hash of the last result (when the return type
-      has `Hashable`) or `none`. The whole loop happens *inside* this
-      single call so the compiler can inline the function-under-test
-      into the loop body — no per-iteration closure indirection. -/
-  runner     : (count : Nat) → (param : Nat) → IO (Option UInt64)
+  /-- Two-stage runner:
+
+      1. Apply to `param`: this runs any per-param setup (the `prep`
+         function from `setup_benchmark … with prep := …`, when
+         present) and returns a closure that holds the prepared state.
+      2. Apply that closure to `count`: this runs the function under
+         test `count` times, hashing each result, and returns
+         `(loopNanos, lastHash)` where `loopNanos` is the wall time
+         spent *only* inside the inner loop.
+
+      Per-param setup therefore runs once per child-process spawn —
+      not once per autotuner probe — and the inner loop's IO closure
+      captures the prepared value, so the function-under-test can be
+      inlined into the loop body with no per-iteration indirection.
+      The `lastHash` is `some _` iff the function's return type has
+      `Hashable`; the runner forces the prep result before the timer
+      starts so prep cost does not leak into the reported nanos. -/
+  runner     : (param : Nat) → IO (Nat → IO (Nat × Option UInt64))
   complexity : Nat → Nat
   deriving Inhabited
 
@@ -108,7 +120,7 @@ not call the two halves directly.
 -/
 def register
     (spec : BenchmarkSpec)
-    (runner : (count : Nat) → (param : Nat) → IO (Option UInt64))
+    (runner : (param : Nat) → IO (Nat → IO (Nat × Option UInt64)))
     (complexity : Nat → Nat) :
     IO Unit :=
   runtimeRegistry.modify (·.insert spec.name { spec, runner, complexity })

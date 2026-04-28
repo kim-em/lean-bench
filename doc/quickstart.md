@@ -53,6 +53,38 @@ $ lake exe bench compare myFib someOtherFib
 ... comparison report ...
 ```
 
+## Optional: per-param setup with `with prep := …`
+
+If your benchmarked function operates on a structure that's expensive
+to build (a sorted array, a tree, a hashmap), declaring it as
+`Nat → α` will fold the build cost into every timed iteration and
+ruin the verdict — a `log n` search behind a `O(n)` setup looks
+linear in the report. Use the optional `with prep := <ident>` clause
+to hoist the setup out of the timing loop:
+
+```lean
+def mkArr (n : Nat) : Array Nat := (Array.range n).map (· * 7)
+
+def prepInput (n : Nat) : Array Nat × Nat :=
+  (mkArr n, (n.max 1 - 1) * 7 / 2)
+
+partial def bsearch (a : Array Nat) (target : Nat) : Option Nat := ...
+
+def runBinary (input : Array Nat × Nat) : Nat :=
+  (bsearch input.1 input.2).getD 0
+
+setup_benchmark runBinary n => Nat.log2 (n + 1)
+  with prep := prepInput
+```
+
+Type contract: `prep : Nat → σ` and the benchmarked function has type
+`σ → α`. The prep's return type `σ` must be `Hashable` (in the example
+above, `Array Nat × Nat` derives it automatically); the macro hashes
+the prep result before timing starts so its construction cost is
+fully paid up front. Prep then runs once per child-process spawn —
+not once per autotuner probe — and the inner loop calls the function
+with the prepared value.
+
 ## Complexity expressions
 
 The complexity expression on the right of `=>` has type `Nat → Nat`.
