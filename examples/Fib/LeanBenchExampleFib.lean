@@ -10,8 +10,10 @@ Two implementations of Fibonacci, both benchmarked.
 - `badFib`  — naive doubly-recursive over `Nat`. Declared complexity
    `144 ^ n / 89 ^ n`: the actual cost is `Θ(φ ^ n)` (golden ratio),
    and `144 / 89 ≈ 1.61798` is within ~3×10⁻⁵ of `φ ≈ 1.61803`, so
-   `(144/89)^n` tracks `φ^n` to well under a percent across the test
-   range — close enough that the verdict should be conclusive.
+   `(144/89)^n` tracks `φ^n` to well under a percent. The harness
+   auto-detects this is exponential and runs a linear ladder over
+   `(lastOk, firstFail)` instead of doubling, which would only get
+   1–2 useful samples before hitting the cap.
 
 Run them with `lake exe fib_benchmark_example list` /
 `run NAME` / `compare A B`.

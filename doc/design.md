@@ -123,9 +123,67 @@ get a synthesized `error` row. Both paths are explicitly tested in
 
 ## Ladder semantics
 
-Each benchmark gets its own doubling ladder
-`[paramFloor, 1, 2, 4, …, paramCeiling]`. Stops at the first
-non-`ok` rung (kill, timeout, error). Two functions in the same
-`compare` may stop at very different params; the report preserves
-both ladders fully and computes `agreeOnCommon` only over the
-intersection.
+The ladder shape is per-benchmark and chosen via `BenchmarkConfig.paramSchedule`:
+
+- `.doubling` — `[paramFloor, 1, 2, 4, …, paramCeiling]`. Stops at
+  the first non-`ok` rung. Right for polynomial complexity: it
+  spreads samples evenly in log-space, which is what the verdict's
+  log-log slope fit needs.
+- `.linear samples` — runs the doubling ladder as a *probe* (rows
+  marked `partOfVerdict := false`), records the bracket
+  `(lastOk, firstFail)`, then refines `firstFail` against the
+  declared complexity model and the wallclock cap (so we don't
+  burn the sweep budget on rungs guaranteed to time out), then
+  walks `samples` consecutive rungs from `lastOk + 1` upward inside
+  the refined bracket. Right for exponential complexity, where the
+  cap kills doubling within 1–2 useful samples.
+- `.auto` (default) — at runtime, evaluates the declared complexity
+  at probe points 8/16/32/64 and resolves to one of the above. The
+  test compares `complexity(64)/complexity(32)` against
+  `complexity(16)/complexity(8)`: equal for any `n^k` (→ doubling),
+  super-linearly larger for any `b^n` (→ linear, threshold 4×).
+
+Probe rows in `.linear` mode are kept in the report (so the user
+sees the cold-regime context that determined the bracket) but
+filtered out of `cMin/cMax`/slope by `Stats.ratiosFromPoints`.
+
+Two functions in the same `compare` may stop at very different
+params; the report preserves both ladders fully and computes
+`agreeOnCommon` only over the intersection.
+
+### Verdict on narrow ladders
+
+The slope-based verdict (`|β| ≤ slopeTolerance`) only works when the
+log-x range is wide enough to make OLS well-conditioned. Linear
+ladders span a narrow log-x range (e.g. `n ∈ 33..40` is `log
+40/33 ≈ 0.19`), so `Stats.fitSlope` returns `none` for spans below
+`1.0` and `deriveVerdict` falls back to a multiplicative range
+check:
+
+```
+cMax / cMin  ≤  max(narrowRangeNoiseFloor, exp(slopeTolerance × xRange))
+```
+
+Two ingredients:
+
+- The scale-adjusted slope bound `exp(slopeTolerance × xRange)`
+  matches the slope semantics: it converges to `1 + slopeTolerance ·
+  xRange` for small spans and admits exactly the constant-`C` data
+  the slope check would. Naive `cMax/cMin ≤ 1 + slopeTolerance` is
+  unsound (admits e.g. `n² log n` declared as `n²` because `log`
+  varies slowly over any narrow interval).
+- The `narrowRangeNoiseFloor` (default 1.50) admits the realistic
+  15–25% spread of single-shot near-cap measurements. At the upper
+  rungs of an exponential-complexity ladder the autotuner runs 1–4
+  inner repeats per spawn (because each batch is already at the
+  cap), so per-call timings are unsmoothed. Without a noise floor
+  the bound `exp(slopeTolerance · xRange) ≈ 1.03` over `xRange ≈
+  0.2` would reject the actual data run after run; `1.50` lets a
+  flat-with-noise C pass with comfortable margin on noisy hardware
+  while still flagging gross deviations.
+
+The tradeoff: with a 1.50 noise floor on a narrow ladder, an actual
+`n^(2.1)` declared as `n^2` over `n ∈ 33..40` would pass (cMax/cMin
+≈ 1.20). On wider ladders that benchmark would use doubling and the
+slope check would catch it. The noise floor only relaxes the
+narrow-range path.

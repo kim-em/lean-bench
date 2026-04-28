@@ -2,9 +2,13 @@
 
 Microbenchmark library for Lean 4. Declare a benchmark and the
 complexity model you expect; run it; the harness reports per-call
-times across a doubling parameter ladder and the ratio
+times across an adaptive parameter ladder and the ratio
 `C = perCallNanos / complexity(n)`. If your model fits, `C` is
 roughly constant.
+
+The ladder shape is auto-picked from the declared complexity:
+doubling for polynomial growth, linear-inside-the-cap-bracket for
+exponential.
 
 ## Try it
 

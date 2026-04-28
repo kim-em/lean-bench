@@ -40,6 +40,12 @@ structure DataPoint where
   /-- Present iff the function's return type has a `Hashable` instance. -/
   resultHash   : Option UInt64
   status       : Status
+  /-- False for doubling-probe rows in `.linear` mode: they exist to
+      bracket the productive band but must not enter the verdict (else
+      cold-regime rows corrupt `cMin/cMax`/slope). True for everything
+      else, including all rows in `.doubling` mode. Parent-side only —
+      not serialized in the child JSONL. -/
+  partOfVerdict : Bool := true
   deriving Repr, Inhabited
 
 /-- Heuristic verdict — see SPEC v0.1: weak labels by design. Decided
@@ -55,6 +61,29 @@ inductive Verdict
 def Verdict.describe : Verdict → String
   | .consistentWithDeclaredComplexity => "consistent with declared complexity"
   | .inconclusive => "inconclusive"
+
+/-- Shape of the parameter ladder.
+
+    `.doubling` is the right schedule for polynomial complexity: it
+    spreads samples evenly in log-space so the verdict's log-log slope
+    fit is well-conditioned.
+
+    `.linear` is the right schedule for exponential complexity: a
+    doubling probe brackets the productive band (between the last
+    `ok` rung and the first capped rung), then `samples` rungs are
+    run inside that bracket so the high-`n` regime where the model
+    dominates overhead is well-sampled.
+
+    `.auto` is the default — at runtime it inspects the declared
+    complexity and resolves to one of the above. The heuristic
+    compares `complexity(2n)/complexity(n)` at two scales: for any
+    `n^k` it is constant (→ doubling); for any `b^n` it grows
+    geometrically (→ linear). -/
+inductive ParamSchedule
+  | doubling
+  | linear (samples : Nat := 16)
+  | auto
+  deriving Inhabited, Repr
 
 /-- Per-benchmark configuration. Defaults are the v0.1 contract. -/
 structure BenchmarkConfig where
@@ -83,6 +112,22 @@ structure BenchmarkConfig where
       like `n log n` vs declared `n`. Widen on chronically noisy
       hardware; tighten only if you trust the measurements. -/
   slopeTolerance : Float := 0.15
+  /-- Noise tolerance on the multiplicative `cMax / cMin` range used
+      as a fallback verdict on narrow ladders (where the slope fit is
+      ill-conditioned). The actual bound combines this floor with the
+      scale-adjusted slope tolerance:
+      `cMax / cMin ≤ max(narrowRangeNoiseFloor, exp(slopeTolerance · xRange))`.
+      Default 1.50 admits the 15–25% spread observed at near-cap
+      `×2^0` rungs of an exponential-complexity linear ladder (where
+      single-shot timing variance is the dominant noise source) with
+      enough headroom for noisy hardware. Tighten if you want to
+      discriminate finer model differences and accept a higher
+      false-negative rate; widen further on chronically noisy hosts. -/
+  narrowRangeNoiseFloor : Float := 1.50
+  /-- Ladder shape — see `ParamSchedule`. `.auto` (default) inspects
+      the declared complexity at runtime and picks `.doubling` for
+      polynomial growth, `.linear` for exponential. -/
+  paramSchedule : ParamSchedule := .auto
   deriving Inhabited, Repr
 
 /-- One entry in the benchmark registry. Stored as `Name`s plus a

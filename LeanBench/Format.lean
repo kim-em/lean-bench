@@ -121,12 +121,19 @@ private def rawRow (cMaybe : Option Float) (dp : DataPoint) : Row :=
   let cStr := match cMaybe with
     | some c => fmtFloat3 c
     | none   => "—"
+  let baseStatus := statusSuffix dp.status
+  -- Doubling probe rows in `.linear` mode are demoted from the
+  -- verdict; mark them so a row with valid timing but `C=—` doesn't
+  -- look like a measurement failure.
+  let status :=
+    if dp.status == .ok && !dp.partOfVerdict then baseStatus ++ " [probe]"
+    else baseStatus
   { param       := fmtNatUnderscores dp.param
     perCallNum  := num
     perCallUnit := unit
     repeats     := fmtRepeats dp.innerRepeats
     cStr
-    status      := statusSuffix dp.status }
+    status }
 
 /-- Render one `BenchmarkResult` as a multi-line block with every
 numeric value bounded to 3 decimals and every column width derived
