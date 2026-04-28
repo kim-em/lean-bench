@@ -14,6 +14,7 @@ defaultTargets = [
   "schema_benchmark_test", "cache_mode_benchmark_test",
   "advisory_benchmark_test", "outer_trials_benchmark_test",
   "export_benchmark_test",
+  "tags_benchmark_test",
 ]
 
 [[require]]
@@ -134,3 +135,8 @@ root = "LeanBenchTestOuterTrials"
 name = "export_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestExport"
+
+[[lean_exe]]
+name = "tags_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestTags"
