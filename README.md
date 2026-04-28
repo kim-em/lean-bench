@@ -76,24 +76,22 @@ See [doc/quickstart.md](doc/quickstart.md).
 
 ## Status
 
-v0.1, tested on Linux. See [PLAN.md](PLAN.md) for the v0.2+ roadmap
-and [doc/quickstart.md](doc/quickstart.md) for the user guide.
-
-The wallclock cap on each measurement is currently enforced by
-shelling out to GNU coreutils `timeout(1)`. This works on any
-platform with `timeout` in PATH (Linux out of the box; macOS if you
-`brew install coreutils`; Windows under WSL). A pure-Lean
-implementation using `IO.Process.Child.kill` would be cross-platform
-and is on the v0.2 list — see [PLAN.md](PLAN.md).
+v0.1. Cross-platform: works on every platform Lean's process API
+supports (Linux, macOS, Windows). See [PLAN.md](PLAN.md) for the
+v0.2+ roadmap and [doc/quickstart.md](doc/quickstart.md) for the
+user guide.
 
 ## Design
 
 Subprocess-per-batch. The child does the timing and the auto-tuned
-inner-repeat loop; the parent only spawns, reads JSONL stdout, and
-SIGTERMs the child if a single batch exceeds `--max-seconds-per-call`.
-We use subprocesses because Lean has no portable in-process interrupt for
-arbitrary computation, so the only reliable way to enforce a
-wallclock cap is to give each measurement its own process.
+inner-repeat loop; the parent spawns directly via `IO.Process.spawn`,
+reads JSONL stdout, and kicks off a sibling `Task` that kills the
+child via `IO.Process.Child.kill` if a single batch exceeds
+`maxSecondsPerCall + killGraceMs`. No external `timeout(1)`
+dependency. We use subprocesses because Lean has no portable
+in-process interrupt for arbitrary computation, so the only reliable
+way to enforce a wallclock cap is to give each measurement its own
+process.
 
 See [doc/design.md](doc/design.md) for the full architectural
 rationale, including limits and known caveats.
@@ -108,5 +106,5 @@ The verdict is a thresholded log-log slope (`|β| ≤ 0.15` over the
 trimmed tail), not a statistical test. β's sign tells you direction;
 read the raw ratios for magnitude.
 
-Linux is tested. macOS/WSL probably work; Windows doesn't (see
-Status).
+CI runs on Linux and macOS. Windows builds in CI but the test suite
+isn't run there yet.

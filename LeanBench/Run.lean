@@ -1,4 +1,5 @@
 import Lean
+import Std.Sync.Mutex
 import LeanBench.Core
 import LeanBench.Env
 import LeanBench.Stats
@@ -9,13 +10,18 @@ import LeanBench.Stats
 For each param in the chosen ladder shape (`ParamSchedule`), spawn
 the same binary as a child:
 
-1. `timeout(1)` enforces the wallclock cap (Linux/macOS; we delegate
-   kill semantics to coreutils rather than rolling SIGTERM/SIGKILL
-   escalation in Lean).
+1. Spawn the same binary as a child (`_child --bench NAME --param N
+   --target-nanos T`) directly via `IO.Process.spawn`, and start a
+   sibling `Task` that sleeps for `maxSecondsPerCall + killGraceMs`
+   and then calls `IO.Process.Child.kill` if the child is still
+   running. No external `timeout(1)` dependency: pure-Lean,
+   cross-platform (works on every platform Lean's process API
+   supports).
 2. Read the child's stdout (one JSONL row).
-3. Exit 0 + parseable row → use it; 124/137 → `killedAtCap`; other →
-   `error`.
-4. Doubling stops at `paramCeiling` or any non-`ok` status.
+3. If the child exited 0 with a parseable row → use it.
+   If the killer task fired → synthesize a `killedAtCap` row.
+   If the child died otherwise → synthesize an `error` row.
+4. Hand the points to `Stats.summarize` for ratio + verdict.
 
 Two ladder shapes:
 
@@ -91,18 +97,16 @@ def synthRow (param : Nat) (status : Status) : DataPoint :=
 def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   let exe ← ownExe
   let target := spec.config.targetInnerNanos
-  let cap : Float := spec.config.maxSecondsPerCall.toFloat
-  let grace : Float := spec.config.killGraceMs.toFloat / 1000.0
+  let deadlineMs : UInt32 :=
+    (spec.config.maxSecondsPerCall * 1000 + spec.config.killGraceMs).toUInt32
   let args : Array String := #[
-    "--kill-after", s!"{grace}",
-    s!"{cap}",
-    exe, "_child",
+    "_child",
     "--bench", spec.name.toString (escape := false),
     "--param", toString param,
     "--target-nanos", toString target
   ]
   let child ← IO.Process.spawn {
-    cmd := "timeout"
+    cmd := exe
     args := args
     stdout := .piped
     stderr := .piped
@@ -114,7 +118,49 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
   -- child wrote to stderr is appended to the synthesized error row
   -- when the child exits non-zero.
   let stderrTask ← child.stderr.readToEnd.asTask
+  -- Two flags + a mutex coordinate the parent and the killer task:
+  --
+  --   * `mainDoneRef` flips to `true` once the parent has finished
+  --     reading stdout and is about to call `child.wait` (which on
+  --     POSIX reaps the pid).
+  --   * `killedRef` flips to `true` iff the killer issued the kill.
+  --
+  -- The killer takes the lock, reads `mainDoneRef`, and only kills if
+  -- the parent hasn't reached the post-stdout point yet. The parent
+  -- takes the lock to set `mainDoneRef` *before* calling
+  -- `child.wait`. This ordering guarantees we never call `kill(2)` on
+  -- a pid that has already been reaped — a reaped pid can be reused
+  -- by the kernel, so signalling it would risk hitting an unrelated
+  -- process.
+  --
+  -- The killer polls `mainDoneRef` while sleeping so it terminates
+  -- quickly when the child finishes early; otherwise every batch
+  -- would block here for the full `deadlineMs`.
+  let mainDoneRef ← IO.mkRef false
+  let killedRef ← IO.mkRef false
+  let mutex ← Std.BaseMutex.new
+  let _killer ← IO.asTask do
+    let pollMs : UInt32 := 25
+    let deadline : Nat := deadlineMs.toNat
+    let mut waited : Nat := 0
+    let mut bailed := false
+    while waited < deadline && !bailed do
+      if (← mainDoneRef.get) then
+        bailed := true
+      else
+        let step : Nat := min pollMs.toNat (deadline - waited)
+        IO.sleep step.toUInt32
+        waited := waited + step
+    unless bailed do
+      mutex.lock
+      unless (← mainDoneRef.get) do
+        killedRef.set true
+        (try child.kill catch _ => pure ())
+      mutex.unlock
   let stdout ← child.stdout.readToEnd
+  mutex.lock
+  mainDoneRef.set true
+  mutex.unlock
   let exit ← child.wait
   let stderrText : String :=
     match stderrTask.get with
@@ -122,6 +168,13 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
     | .error _ => ""
   let withStderr (msg : String) : String :=
     if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
+  -- The killer writes `killedRef := true` *before* it calls `Child.kill`,
+  -- so by the time `child.wait` has returned (which can only happen
+  -- after the kill takes effect, in the kill case) the flag is already
+  -- committed. Hence we don't have to synchronize with the killer task.
+  let wasKilled ← killedRef.get
+  if wasKilled then
+    return synthRow param .killedAtCap
   match exit with
   | 0 =>
     let line := stdout.trimAscii.toString
@@ -130,8 +183,6 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
     match parseChildRow line with
     | .ok row => return row
     | .error e => return synthRow param (.error (withStderr s!"parse: {e}"))
-  | 124 => return synthRow param .killedAtCap
-  | 137 => return synthRow param .killedAtCap
   | other => return synthRow param (.error (withStderr s!"child exited with code {other}"))
 
 /-- Doubling ladder from floor through ceiling. -/
