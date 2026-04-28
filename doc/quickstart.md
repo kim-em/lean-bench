@@ -185,6 +185,60 @@ data point with `total_nanos` smaller than ~10× the spawn floor is
 noise, not algorithm data — interpret it as a lower bound, not a
 measurement.
 
+## Fixed-problem benchmarks
+
+Sometimes you don't have a parameter to walk: there's a single hard
+input and you want to record an absolute wall-clock number on it,
+either to compare against an external reference (FLINT, fpLLL, …) or
+to catch absolute-performance regressions over time. The
+`setup_fixed_benchmark` macro registers a benchmark of this shape.
+
+The function name *is* the benchmark name and must resolve to either
+`α` (a pure value) or `IO α` (an effectful computation, useful when
+the workload reads input from disk or shells out to an external
+tool):
+
+```lean
+def factorXOverFTwo : Polynomial Bool := -- ... single hard problem
+setup_fixed_benchmark factorXOverFTwo
+
+def runFplll : IO LLLOutput := -- ... shell out
+setup_fixed_benchmark runFplll where {
+  repeats := 10
+  maxSecondsPerCall := 30.0
+}
+```
+
+There is no `Nat` parameter, no complexity expression, and no verdict.
+The runner does one warmup call, then `repeats` measured calls, and
+emits one JSONL row per repeat with `kind:"fixed"`. The report shows
+median / min / max plus a hash-agreement check across repeats — a
+divergence flags a non-deterministic registration.
+
+The same `run` and `compare` subcommands work; they dispatch by
+registration kind. The `list` subcommand annotates fixed entries with
+`[fixed]`. `verify` covers fixed benchmarks too — a single
+sanity-check spawn per registration.
+
+`FixedBenchmarkConfig` knobs:
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `repeats` | `5` | Number of measured invocations after the warmup |
+| `maxSecondsPerCall` | `60.0` | Hard wallclock cap per invocation (seconds) |
+| `killGraceMs` | `100` | Grace ms between SIGTERM and SIGKILL |
+| `warmup` | `true` | Whether to perform a single discarded warmup call |
+
+The CLI flag `--repeats N` overrides the declared `repeats` per run;
+`--max-seconds-per-call` is shared with parametric. Parametric-only
+flags (`--param-ceiling`, `--slope-tolerance`, …) are silently ignored
+when dispatching a fixed benchmark.
+
+`compare A B` requires that all listed names be the same kind
+(parametric or fixed). The fixed comparison report prints a
+relative-timing line — each function's ratio against the first —
+which is the v0.2 hex use case for "this took ~2× FLINT."
+
 ## Caveats
 
 - The wallclock cap is enforced via a pure-Lean kill path

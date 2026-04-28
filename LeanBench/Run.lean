@@ -360,4 +360,166 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   let summary := Stats.summarize spec entry.complexity points
   return { summary with spawnFloorNanos? := spawnFloor }
 
+/-! ## Fixed-benchmark orchestration -/
+
+/-- Parse one fixed-benchmark JSONL row into a `FixedDataPoint`. -/
+def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
+  let json ← Json.parse line
+  let repeatIndex ← json.getObjValAs? Nat "repeat_index"
+  let totalNanos ← json.getObjValAs? Nat "total_nanos"
+  let resultHash : Option UInt64 :=
+    match json.getObjVal? "result_hash" with
+    | .ok (.str s) => parseHexU64 s
+    | _ => none
+  let statusStr ← json.getObjValAs? String "status"
+  let status : Status := match statusStr with
+    | "ok" => .ok
+    | "timed_out" => .timedOut
+    | "killed_at_cap" => .killedAtCap
+    | "error" =>
+        .error ((json.getObjValAs? String "error").toOption.getD "")
+    | _ => .error s!"unknown status: {statusStr}"
+  return { repeatIndex, totalNanos, resultHash, status }
+
+private def synthFixedRow (idx : Nat) (status : Status) : FixedDataPoint :=
+  { repeatIndex := idx, totalNanos := 0, resultHash := none, status }
+
+/-- Spawn one fixed-benchmark child. `repeatIndex` is the 0-based
+    index reported back in the JSONL row; `cfg` carries the kill
+    cap. Same kill-on-cap machinery as `runOneBatch`. -/
+def runFixedOneBatch (spec : FixedSpec) (cfg : FixedBenchmarkConfig)
+    (repeatIndex : Nat) : IO FixedDataPoint := do
+  let exe ← ownExe
+  let deadlineMs : UInt32 :=
+    (cfg.maxSecondsPerCall * 1000.0 + cfg.killGraceMs.toFloat).toUInt32
+  let args : Array String := #[
+    "_child",
+    "--bench", spec.name.toString (escape := false),
+    "--fixed",
+    "--repeat-index", toString repeatIndex
+  ]
+  let child ← IO.Process.spawn {
+    cmd := exe
+    args := args
+    stdout := .piped
+    stderr := .piped
+    stdin := .null
+  }
+  let stderrTask ← child.stderr.readToEnd.asTask
+  let mainDoneRef ← IO.mkRef false
+  let killedRef ← IO.mkRef false
+  let mutex ← Std.BaseMutex.new
+  let _killer ← IO.asTask do
+    let pollMs : UInt32 := 25
+    let deadline : Nat := deadlineMs.toNat
+    let mut waited : Nat := 0
+    let mut bailed := false
+    while waited < deadline && !bailed do
+      if (← mainDoneRef.get) then
+        bailed := true
+      else
+        let step : Nat := min pollMs.toNat (deadline - waited)
+        IO.sleep step.toUInt32
+        waited := waited + step
+    unless bailed do
+      mutex.lock
+      unless (← mainDoneRef.get) do
+        killedRef.set true
+        (try child.kill catch _ => pure ())
+      mutex.unlock
+  let stdout ← child.stdout.readToEnd
+  mutex.lock
+  mainDoneRef.set true
+  mutex.unlock
+  let exit ← child.wait
+  let stderrText : String :=
+    match stderrTask.get with
+    | .ok s => s.trimAscii.toString
+    | .error _ => ""
+  let withStderr (msg : String) : String :=
+    if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
+  let wasKilled ← killedRef.get
+  if wasKilled then
+    return synthFixedRow repeatIndex .killedAtCap
+  match exit with
+  | 0 =>
+    let line := stdout.trimAscii.toString
+    if line.isEmpty then
+      return synthFixedRow repeatIndex
+        (.error (withStderr "child exited 0 but produced no output"))
+    match parseFixedChildRow line with
+    | .ok row => return row
+    | .error e =>
+      return synthFixedRow repeatIndex (.error (withStderr s!"parse: {e}"))
+  | other =>
+    return synthFixedRow repeatIndex
+      (.error (withStderr s!"child exited with code {other}"))
+
+/-- Numeric median of a sorted `Array Nat`. Returns the upper of the
+    two middle elements for even sizes — i.e. the element at index
+    `size / 2` after sorting ascending. No float arithmetic; the raw
+    nanosecond values are reported as-is.
+
+    The "upper middle on even" convention is conservative for
+    benchmark reporting: it errs toward the slower of two middle
+    samples, which is the safer default if you're using the median
+    to flag regressions. The min/max columns expose the bracket so
+    the choice is visible. -/
+private def medianNat (sorted : Array Nat) : Option Nat :=
+  if sorted.isEmpty then none
+  else some sorted[sorted.size / 2]!
+
+/-- Are all `ok` repeats hash-consistent? Repeats with `none` hashes
+    (non-Hashable type) all agree vacuously; mixed `some`/`none`
+    shouldn't happen but is treated as agreement (the registration
+    macro decides Hashable up front). -/
+private def computeHashAgreement (points : Array FixedDataPoint) : Bool := Id.run do
+  let okHashes : Array UInt64 := points.filterMap fun dp =>
+    match dp.status, dp.resultHash with
+    | .ok, some h => some h
+    | _,   _      => none
+  if okHashes.isEmpty then return true
+  let h₀ := okHashes[0]!
+  return okHashes.all (· == h₀)
+
+/-- Run one fixed benchmark end-to-end: optional warmup, then
+    `cfg.repeats` measured calls. Each measured call is its own
+    child spawn so the kill-on-cap machinery covers it. -/
+def runFixedBenchmark (name : Lean.Name)
+    (override : FixedConfigOverride := {}) : IO FixedResult := do
+  let some entry ← findFixedRuntimeEntry name
+    | throw (.userError s!"unregistered fixed benchmark: {name}")
+  let cfg := override.apply entry.spec.config
+  match cfg.validate with
+  | .error msg => throw (.userError s!"{name}: {msg}")
+  | .ok () => pure ()
+  -- Warmup: fire-and-forget; we don't fail the run if warmup itself
+  -- fails, but we do propagate killed/error status so the user sees
+  -- it (recorded as repeatIndex = 0 in the warmup pass — but not
+  -- pushed into `points`).
+  if cfg.warmup then
+    let _ ← runFixedOneBatch entry.spec cfg 0
+  let mut points : Array FixedDataPoint := #[]
+  for i in [0 : cfg.repeats] do
+    let dp ← runFixedOneBatch entry.spec cfg i
+    points := points.push dp
+  let okNanos : Array Nat := points.filterMap fun dp =>
+    match dp.status with
+    | .ok => some dp.totalNanos
+    | _   => none
+  let sorted := okNanos.qsort (· < ·)
+  let medianNanos? := medianNat sorted
+  let minNanos? := sorted[0]?
+  let maxNanos? := if sorted.isEmpty then none else some sorted[sorted.size - 1]!
+  let hashesAgree := computeHashAgreement points
+  return {
+    function := name
+    config := cfg
+    points
+    medianNanos?
+    minNanos?
+    maxNanos?
+    hashesAgree
+  }
+
 end LeanBench

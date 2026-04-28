@@ -125,4 +125,49 @@ def register
     IO Unit :=
   runtimeRegistry.modify (·.insert spec.name { spec, runner, complexity })
 
+/-! ## Fixed-benchmark registry
+
+A parallel pair of registries (compile-time + runtime) for
+fixed-problem benchmarks declared with `setup_fixed_benchmark`. The
+shape mirrors the parametric path so reasoning about either kind in
+isolation is straightforward; cross-cutting code (`list`, `compare`,
+`verify`) iterates over both registries explicitly. -/
+
+initialize benchFixedSpecExt : SimplePersistentEnvExtension FixedSpec (Array FixedSpec) ←
+  registerSimplePersistentEnvExtension {
+    name := `LeanBench.benchFixedSpecExt
+    addImportedFn := fun ass => ass.foldl (· ++ ·) #[]
+    addEntryFn    := fun s e => s.push e
+  }
+
+def addFixedSpec (env : Environment) (spec : FixedSpec) : Environment :=
+  benchFixedSpecExt.addEntry env spec
+
+def findFixedSpec (env : Environment) (name : Name) : Option FixedSpec :=
+  (benchFixedSpecExt.getState env).find? (·.name == name)
+
+def allFixedSpecs (env : Environment) : Array FixedSpec :=
+  benchFixedSpecExt.getState env
+
+/-- Runtime entry for a fixed benchmark. The `runner` performs one
+    timed invocation: starts the timer, runs the registered value
+    (forcing it via `blackBox`), stops the timer, and returns
+    `(totalNanos, resultHash?)`. -/
+structure FixedRuntimeEntry where
+  spec   : FixedSpec
+  runner : IO (Nat × Option UInt64)
+  deriving Inhabited
+
+initialize fixedRuntimeRegistry : IO.Ref (Std.HashMap Name FixedRuntimeEntry) ←
+  IO.mkRef {}
+
+def findFixedRuntimeEntry (name : Name) : IO (Option FixedRuntimeEntry) := do
+  return (← fixedRuntimeRegistry.get).get? name
+
+def allFixedRuntimeEntries : IO (Array FixedRuntimeEntry) := do
+  return (← fixedRuntimeRegistry.get).valuesArray
+
+def registerFixed (spec : FixedSpec) (runner : IO (Nat × Option UInt64)) : IO Unit :=
+  fixedRuntimeRegistry.modify (·.insert spec.name { spec, runner })
+
 end LeanBench

@@ -85,10 +85,12 @@ def testClassify : IO UInt32 := do
     Pin the contract: both `f 0` and `f 1` are exercised. -/
 def testHappyPath : IO UInt32 := do
   let reports ← LeanBench.verify [benchmarkName]
-  if reports.size != 1 then
-    IO.eprintln s!"expected 1 report, got {reports.size}"
+  -- `trivialFn` is a parametric benchmark, so we expect exactly one
+  -- parametric report and no fixed reports.
+  if reports.parametric.size != 1 || reports.fixed.size != 0 then
+    IO.eprintln s!"expected 1 parametric report, got parametric={reports.parametric.size} fixed={reports.fixed.size}"
     return 1
-  let r := reports[0]!
+  let r := reports.parametric[0]!
   unless r.passed do
     IO.eprintln s!"verify report unexpectedly failed: {Format.fmtVerifyReport r}"
     return 1
@@ -162,6 +164,29 @@ def testFormatterFailure : IO UInt32 := do
     return 1
   return 0
 
+/-- Pin the qualified-name CLI contract: `verify NAME` must accept a
+    fully-qualified hierarchical name. A previous regression here
+    used `Lean.Name.mkSimple`, which packaged the whole dotted
+    string into one atomic name and never matched anything. -/
+def testCliQualifiedName : IO UInt32 := do
+  -- Drive the CLI's verify path the same way the user would, with a
+  -- qualified name. We can't easily invoke the full Cli.dispatch
+  -- here without re-entering the test binary, but we *can* exercise
+  -- the equivalent name parser so the test catches a re-regression
+  -- of the Lean.Name.mkSimple bug.
+  let parsed := String.toName "LeanBench.Test.Verify.trivialFn"
+  unless parsed == benchmarkName do
+    IO.eprintln s!"expected qualified-name parse to match benchmarkName; got {parsed} vs {benchmarkName}"
+    return 1
+  -- And go end-to-end through the library entry point that the CLI
+  -- calls. If this resolves and passes, qualified-name CLI access
+  -- works.
+  let reports ← LeanBench.verify [parsed]
+  unless reports.parametric.size == 1 ∧ reports.parametric[0]!.passed do
+    IO.eprintln "qualified-name verify failed"
+    return 1
+  return 0
+
 /-- Run all verify tests, fail-fast. -/
 def runTests : IO UInt32 := do
   for (label, t) in
@@ -169,7 +194,8 @@ def runTests : IO UInt32 := do
      ("happyPath", testHappyPath),
      ("unregistered", testUnregistered),
      ("endToEndFailure", testEndToEndFailure),
-     ("formatterFailure", testFormatterFailure)]
+     ("formatterFailure", testFormatterFailure),
+     ("cliQualifiedName", testCliQualifiedName)]
   do
     let code ← t
     if code != 0 then

@@ -209,6 +209,90 @@ def fmtSpec (spec : BenchmarkSpec) : String :=
   let h := if spec.hashable then "" else "  (no Hashable)"
   s!"  {spec.name}    expected complexity: {spec.complexityFormula}{h}"
 
+/-- One-line summary of a registered fixed benchmark. The `[fixed]`
+    annotation distinguishes it from parametric entries in the list. -/
+def fmtFixedSpec (spec : FixedSpec) : String :=
+  let h := if spec.hashable then "" else "  (no Hashable)"
+  s!"  {spec.name}    [fixed] repeats={spec.config.repeats}{h}"
+
+/-- Render a single fixed-benchmark result as a multi-line block:
+    one row per measured repeat plus a summary with median/min/max
+    and the cross-repeat hash agreement check. -/
+def fmtFixedResult (r : FixedResult) : String := Id.run do
+  let header := s!"{r.function}    [fixed] repeats={r.config.repeats}"
+  let mut lines : Array String := #[header]
+  let mut idx : Nat := 0
+  let nums := r.points.map fun dp =>
+    match dp.status with
+    | .ok =>
+      let (n, _) := fmtNanos dp.totalNanos
+      n
+    | _ => "—"
+  let aligned := alignDecimals nums
+  let units := r.points.map fun dp =>
+    match dp.status with
+    | .ok => (fmtNanos dp.totalNanos).2
+    | _ => ""
+  let wUnit := units.foldl (fun m u => max m u.length) 0
+  for dp in r.points do
+    let suffix := match dp.status with
+      | .ok => ""
+      | .timedOut => " [timed out]"
+      | .killedAtCap => " [killed at cap]"
+      | .error msg => s!" [error: {msg}]"
+    let num := aligned[idx]!
+    let unit := units[idx]!
+    let perCall := num ++ " " ++ rightpad unit wUnit
+    lines := lines.push s!"  repeat {idx}  {perCall}{suffix}"
+    idx := idx + 1
+  let summary := match r.medianNanos?, r.minNanos?, r.maxNanos? with
+    | some med, some lo, some hi =>
+      s!"  median: {fmtNanosStr med}    min: {fmtNanosStr lo}    max: {fmtNanosStr hi}"
+    | _, _, _ => "  median: — (no successful repeats)"
+  lines := lines.push summary
+  let hashLine := if r.hashesAgree then
+      "  hash: all repeats agree"
+    else
+      "  hash: DIVERGED across repeats — likely a non-deterministic benchmark"
+  lines := lines.push hashLine
+  return "\n".intercalate lines.toList
+
+/-- Render a fixed-benchmark comparison report: one block per
+    function plus a relative-timing line and the hash-agreement
+    summary. -/
+def fmtFixedComparison (rep : FixedComparisonReport) : String := Id.run do
+  let mut lines : Array String := #[]
+  for r in rep.results do
+    lines := lines.push (fmtFixedResult r)
+    lines := lines.push ""
+  -- Relative timing: pick the first result's median as the baseline,
+  -- emit one ratio line per other result.
+  match rep.results[0]? with
+  | some baseline =>
+    match baseline.medianNanos? with
+    | some baseNanos =>
+      let baseFloat := baseNanos.toFloat
+      let mut relLines : Array String :=
+        #[s!"relative median (baseline = {baseline.function}, the first CLI argument):"]
+      for r in rep.results do
+        let label := s!"  {r.function}"
+        match r.medianNanos? with
+        | some n =>
+          let ratio := n.toFloat / baseFloat
+          relLines := relLines.push s!"{label}: {fmtFloat3 ratio}× ({fmtNanosStr n})"
+        | none =>
+          relLines := relLines.push s!"{label}: — (no successful repeats)"
+      lines := lines ++ relLines
+    | none =>
+      lines := lines.push s!"relative median: baseline {baseline.function} has no successful repeats"
+  | none => pure ()
+  let agreeStr := match rep.agreeOnHash with
+    | .allAgreed => "all functions agree on output"
+    | .hashUnavailable => "hash unavailable for one or more functions: cannot compare outputs"
+    | .diverged entries => s!"DIVERGED on {entries.size} (function, function) pairs"
+  lines := lines.push s!"agreement: {agreeStr}"
+  return "\n".intercalate lines.toList
+
 /-- Render one verify report. Passing reports render as a single
     line. Failing reports render as a header line followed by one
     indented line per failed check, so users see every distinct
@@ -233,6 +317,34 @@ def fmtVerify (reports : Array VerifyReport) : String := Id.run do
   let summary :=
     if failed == 0 then s!"all {reports.size} benchmark(s) passed"
     else s!"{failed} of {reports.size} benchmark(s) failed verification"
+  lines := lines.push summary
+  return "\n".intercalate lines.toList
+
+/-- Render one fixed-benchmark verify report. Same shape as
+    `fmtVerifyReport`. -/
+def fmtFixedVerifyReport (r : FixedVerifyReport) : String :=
+  if r.passed then
+    s!"  [ok ] {r.spec.name}  [fixed]"
+  else
+    let header := s!"  [FAIL] {r.spec.name}  [fixed]"
+    let failures := r.checks.filterMap (·.failure)
+    let body := failures.toList.map (fun msg => s!"         —  {msg}")
+    "\n".intercalate (header :: body)
+
+/-- Render a unified verify summary that covers both registries. -/
+def fmtCombinedVerify (r : CombinedVerifyReports) : String := Id.run do
+  let total := r.totalCount
+  if total == 0 then
+    return "(no benchmarks registered)"
+  let mut lines : Array String := #[s!"verifying {total} benchmark(s)..."]
+  for rep in r.parametric do
+    lines := lines.push (fmtVerifyReport rep)
+  for rep in r.fixed do
+    lines := lines.push (fmtFixedVerifyReport rep)
+  let failed := r.failedCount
+  let summary :=
+    if failed == 0 then s!"all {total} benchmark(s) passed"
+    else s!"{failed} of {total} benchmark(s) failed verification"
   lines := lines.push summary
   return "\n".intercalate lines.toList
 

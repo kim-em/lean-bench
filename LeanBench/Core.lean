@@ -275,4 +275,127 @@ structure ComparisonReport where
   agreeOnCommon : AgreementStatus
   deriving Inhabited
 
+/-! ## Fixed-problem benchmarks
+
+A fixed benchmark records the wall-clock time for a single canonical
+input — there is no parameter to walk and no complexity model to
+verify. The user registers a value of type `α` or `IO α` (the
+benchmark name is the function name); the harness records `repeats`
+measured invocations and reports median/min/max plus a result-hash
+agreement check.
+
+The type / runtime split mirrors the parametric path: a `FixedSpec`
+record (compile-time persistent extension) plus a runtime closure
+in a separate registry, both populated from a single
+`setup_fixed_benchmark` macro emission.
+-/
+
+/-- Per-benchmark configuration for a fixed-problem benchmark.
+
+Defaults are tuned for the "single hard problem ~1s" use case: a
+warmup call followed by 5 measured calls, with a 60s wallclock cap
+per call (much higher than the parametric default of 1s, since the
+whole point of a fixed benchmark is recording the absolute time of
+something genuinely expensive).
+
+Override defaults at declaration time via
+`setup_fixed_benchmark name where { … }` or at run time via flags
+on `run` / `compare` (e.g. `--repeats 10 --max-seconds-per-call 30`). -/
+structure FixedBenchmarkConfig where
+  /-- Number of measured invocations per `run`. The harness performs
+      one warmup call before this count, which is discarded. -/
+  repeats           : Nat   := 5
+  /-- Hard wallclock cap for any single invocation (s). Parent kills
+      child past this. -/
+  maxSecondsPerCall : Float := 60.0
+  /-- Grace ms between SIGTERM and SIGKILL on the child. -/
+  killGraceMs       : Nat   := 100
+  /-- Whether to perform a single discarded warmup call before the
+      measured calls. Defaults to true. -/
+  warmup            : Bool  := true
+  deriving Inhabited, Repr, BEq
+
+/-- Run-time overrides applied on top of a benchmark's declared
+`FixedBenchmarkConfig`. Each `none` field leaves the declared value
+untouched; each `some` replaces it. -/
+structure FixedConfigOverride where
+  repeats?           : Option Nat   := none
+  maxSecondsPerCall? : Option Float := none
+  killGraceMs?       : Option Nat   := none
+  warmup?            : Option Bool  := none
+  deriving Inhabited, Repr
+
+/-- Apply overrides on top of a fixed config. `none` keeps the value. -/
+def FixedConfigOverride.apply (o : FixedConfigOverride)
+    (c : FixedBenchmarkConfig) : FixedBenchmarkConfig :=
+  { c with
+    repeats           := o.repeats?.getD           c.repeats
+    maxSecondsPerCall := o.maxSecondsPerCall?.getD c.maxSecondsPerCall
+    killGraceMs       := o.killGraceMs?.getD       c.killGraceMs
+    warmup            := o.warmup?.getD            c.warmup }
+
+def FixedBenchmarkConfig.validate (c : FixedBenchmarkConfig) : Except String Unit := do
+  unless c.maxSecondsPerCall > 0.0 do
+    .error s!"FixedBenchmarkConfig.maxSecondsPerCall must be > 0; got {c.maxSecondsPerCall}"
+  unless c.repeats ≥ 1 do
+    .error s!"FixedBenchmarkConfig.repeats must be ≥ 1; got {c.repeats}"
+  pure ()
+
+/-- One entry in the fixed-benchmark registry. -/
+structure FixedSpec where
+  /-- The registered value. -/
+  name              : Lean.Name
+  /-- Auto-generated runner that performs one timed invocation and
+      returns `(totalNanos, resultHash?)`. -/
+  runnerName        : Lean.Name
+  /-- Auto-generated `FixedBenchmarkConfig` def carrying any
+      `where { ... }` overrides applied at declaration time. -/
+  configDeclName    : Lean.Name := Lean.Name.anonymous
+  /-- True iff the registered value's underlying type has a
+      `Hashable` instance. -/
+  hashable          : Bool
+  config            : FixedBenchmarkConfig
+  deriving Inhabited, Repr
+
+/-- One repeat of a fixed-benchmark run. -/
+structure FixedDataPoint where
+  /-- 0-based index across the `repeats` measured calls. The single
+      warmup call is not recorded. -/
+  repeatIndex : Nat
+  totalNanos  : Nat
+  /-- Present iff the benchmark's value type has `Hashable`. -/
+  resultHash  : Option UInt64
+  status      : Status
+  deriving Repr, Inhabited
+
+/-- Result of a single fixed-benchmark run. -/
+structure FixedResult where
+  function   : Lean.Name
+  config     : FixedBenchmarkConfig
+  points     : Array FixedDataPoint
+  /-- Median wall time across `ok` repeats (ns). `none` if no
+      repeat returned `ok`. -/
+  medianNanos? : Option Nat
+  /-- Minimum wall time across `ok` repeats (ns). -/
+  minNanos?    : Option Nat
+  /-- Maximum wall time across `ok` repeats (ns). -/
+  maxNanos?    : Option Nat
+  /-- True iff every `ok` repeat produced the same hash (or hashing
+      was unavailable across the board). False iff repeats disagreed
+      — that's a non-determinism bug in the registered function. -/
+  hashesAgree  : Bool
+  deriving Inhabited, Repr
+
+/-- Whether two fixed benchmarks in a `compare` agree on output. -/
+inductive FixedAgreementStatus
+  | allAgreed
+  | diverged (entries : Array (Lean.Name × Lean.Name))
+  | hashUnavailable
+  deriving Repr, Inhabited
+
+structure FixedComparisonReport where
+  results       : Array FixedResult
+  agreeOnHash   : FixedAgreementStatus
+  deriving Inhabited
+
 end LeanBench

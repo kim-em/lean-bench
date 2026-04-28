@@ -78,4 +78,41 @@ def compare (names : List Lean.Name) (override : ConfigOverride := {}) :
   let agree := computeAgreement results common
   return { results, commonParams := common, agreeOnCommon := agree }
 
+/-! ## Fixed-benchmark comparison -/
+
+/-- Hash agreement across N fixed-benchmark results. For each
+    function we take the *first* `ok` hash (intra-function
+    consistency is recorded separately on `FixedResult.hashesAgree`).
+    Any function without a hash → `hashUnavailable`. Otherwise we
+    pairwise compare the first function's hash against each other's;
+    mismatches collect into a `diverged` list. -/
+private def computeFixedAgreement
+    (results : Array FixedResult) : FixedAgreementStatus := Id.run do
+  let firstHashes : Array (Lean.Name × Option UInt64) := results.map fun r =>
+    let h := r.points.findSome? fun dp =>
+      match dp.status, dp.resultHash with
+      | .ok, some h => some h
+      | _,   _      => none
+    (r.function, h)
+  if firstHashes.any (fun (_, h) => h.isNone) then return .hashUnavailable
+  if firstHashes.size < 2 then return .allAgreed
+  let (n₀, h₀?) := firstHashes[0]!
+  let h₀ := h₀?.get!
+  let mut diverged : Array (Lean.Name × Lean.Name) := #[]
+  for i in [1:firstHashes.size] do
+    let (nᵢ, hᵢ?) := firstHashes[i]!
+    let hᵢ := hᵢ?.get!
+    if hᵢ != h₀ then
+      diverged := diverged.push (n₀, nᵢ)
+  if diverged.isEmpty then .allAgreed else .diverged diverged
+
+/-- Run a `compare` over fixed benchmarks. -/
+def compareFixed (names : List Lean.Name)
+    (override : FixedConfigOverride := {}) : IO FixedComparisonReport := do
+  let mut results : Array FixedResult := #[]
+  for n in names do
+    results := results.push (← runFixedBenchmark n override)
+  let agree := computeFixedAgreement results
+  return { results, agreeOnHash := agree }
+
 end LeanBench
