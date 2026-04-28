@@ -7,6 +7,7 @@ import LeanBench.Child
 import LeanBench.Compare
 import LeanBench.Verify
 import LeanBench.Format
+import LeanBench.Suite
 
 /-!
 # `LeanBench.Cli` — argv dispatcher
@@ -177,6 +178,47 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   IO.eprintln "compare: cannot mix parametric and fixed benchmarks; or one or more names are unregistered"
   return 1
 
+/-- `suite --total-seconds N [--export FILE] [--min-per-benchmark-seconds F]`
+    runs the registered benchmark catalogue inside a fixed wall-clock
+    budget (issue #9). Prints a per-benchmark summary plus a list of
+    skipped benchmarks; with `--export FILE` writes a unified JSONL
+    report including a synthetic `budget_status: "skipped"` row per
+    deferred benchmark.
+
+    `--max-seconds-per-call` and friends apply uniformly to every
+    benchmark in the suite (mirroring `compare`); a dedicated
+    `--total-seconds` is the suite-level budget. -/
+def runSuiteCmd (p : Cli.Parsed) : IO UInt32 := do
+  let totalSeconds : Float :=
+    match parsedFlag? p "total-seconds" Float with
+    | some t => t
+    | none =>
+      -- The flag is required but `Cli` reports it via parser failure
+      -- before we get here. Defensive default to keep the IO type
+      -- happy in the impossible-arm.
+      0.0
+  if totalSeconds ≤ 0.0 then
+    IO.eprintln "suite: --total-seconds must be > 0"
+    return 1
+  let minPerBench : Float :=
+    (parsedFlag? p "min-per-benchmark-seconds" Float).getD 0.1
+  if minPerBench ≤ 0.0 then
+    IO.eprintln "suite: --min-per-benchmark-seconds must be > 0"
+    return 1
+  let budget : SuiteBudgetConfig :=
+    { totalSeconds := totalSeconds
+      minPerBenchmarkSeconds := minPerBench }
+  let pOverride := configOverrideFromParsed p
+  let fOverride := fixedConfigOverrideFromParsed p
+  let report ← LeanBench.Suite.runSuiteWithBudget budget pOverride fOverride
+  IO.println (Format.fmtSuiteReport report)
+  match parsedFlag? p "export" String with
+  | some path =>
+    LeanBench.Suite.writeSuiteJsonl report (System.FilePath.mk path)
+    IO.println s!"exported {report.entries.size} entries to {path}"
+  | none => pure ()
+  return 0
+
 def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
   -- Use `String.toName` so qualified names like `My.Bench.foo` resolve.
   -- `Lean.Name.mkSimple` would package the whole dotted string into one
@@ -282,6 +324,39 @@ to every benchmark in the comparison."
     ...names : String;     "Two or more benchmark names (variadic)."
 ]
 
+def suiteSub : Cmd := `[Cli|
+  suite VIA runSuiteCmd; ["0.1.0"]
+  "Run the registered benchmark catalogue inside a fixed wall-clock budget (issue #9).
+
+Walks parametric registrations first, then fixed registrations. For each entry
+the scheduler checks whether enough budget remains; if not, the entry is recorded
+as `skipped` in both the terminal report and (with `--export`) the exported JSONL
+file. Mid-benchmark, the deadline-aware ladder check aborts further rungs once
+the budget is exhausted, so the in-flight batch is the only source of slack.
+
+The bound on total wall time is `--total-seconds + maxSecondsPerCall + a few
+hundred ms of process-spawn slack`, regardless of how many benchmarks are
+registered. CI users get a predictable cap; partial results from completed
+benchmarks are preserved.
+
+Override flags layer on top of declared `BenchmarkConfig` values for every
+benchmark in the suite (same semantics as `compare`)."
+
+  FLAGS:
+    "total-seconds" : Float;          "Required: wall-clock budget for the whole suite (seconds; e.g. 60)."
+    "min-per-benchmark-seconds" : Float;  "Below this remaining budget the next benchmark is skipped rather than started (default 0.1s)."
+    "export" : String;                "Write a JSONL report (one row per measurement plus one synthetic skip row per deferred benchmark) to this path."
+    "max-seconds-per-call" : Float;   "Applied uniformly: hard wallclock cap per batch / per call (seconds; JSON-style numbers)."
+    "target-inner-nanos" : Nat;       "Parametric only: auto-tune target wall-time per batch (nanoseconds)."
+    "param-floor" : Nat;              "Parametric only: lowest param the doubling ladder starts from."
+    "param-ceiling" : Nat;            "Parametric only: highest param the doubling ladder reaches before stopping."
+    "warmup-fraction" : Float;        "Parametric only: fraction of leading ratios to drop before computing the verdict (JSON-style numbers)."
+    "slope-tolerance" : Float;        "Parametric only: |β| ≤ this for the consistent verdict (JSON-style numbers)."
+    "param-schedule" : LeanBench.ParamSchedule; "Parametric only: ladder shape (auto, doubling, or linear)."
+    "cache-mode" : LeanBench.CacheMode; "Parametric only: warm or cold."
+    "repeats" : Nat;                  "Fixed only: number of measured invocations after the warmup call."
+]
+
 def verifySub : Cmd := `[Cli|
   verify VIA runVerifyCmd; ["0.1.0"]
   "Sanity-check registered benchmarks (f 0, f 1 via the child path). Verifies all benchmarks if no names are given. Exit code is non-zero on any failure."
@@ -299,6 +374,7 @@ def topCmd : Cmd := `[Cli|
     listSub;
     runSub;
     compareSub;
+    suiteSub;
     verifySub;
     childSub
 ]

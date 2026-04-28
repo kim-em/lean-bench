@@ -298,6 +298,20 @@ private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
     let last := min (firstFail - 1) (lastOk + samples)
     (Array.range (last - lastOk)).map (lastOk + 1 + ·)
 
+/-- True iff `deadline?` is set and the current monotonic clock has
+    reached or passed it. Used by the budgeted-suite scheduler (issue
+    #9) to abort mid-ladder when the wall-clock budget is exhausted —
+    the per-batch wallclock cap (`maxSecondsPerCall`) bounds slack on
+    the in-flight batch, but only this check stops the ladder loop
+    from queueing more batches past the deadline. `none` disables the
+    check (default for non-budgeted runs). -/
+private def deadlineReached (deadline? : Option Nat) : IO Bool := do
+  match deadline? with
+  | none => return false
+  | some dl =>
+    let now ← IO.monoNanosNow
+    return now ≥ dl
+
 /-- Run the static doubling ladder. Returns `(points, lastOk?, firstFail?)`:
 
 - `lastOk?` is the largest param whose status was `.ok` (none if no row
@@ -306,8 +320,14 @@ private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
   (none if the ladder ran to ceiling without failing).
 
 Probe rows are returned with whatever `partOfVerdict` `runOneBatch`
-chose (defaults to true); the caller flips them as needed. -/
-private def runDoublingProbe (spec : BenchmarkSpec) :
+chose (defaults to true); the caller flips them as needed.
+
+`deadline?` lets a caller (typically the issue #9 budgeted suite)
+abort the ladder mid-walk: if the monotonic clock reaches or passes
+the deadline before the next rung is dispatched, the loop breaks
+without spawning further children. -/
+private def runDoublingProbe (spec : BenchmarkSpec)
+    (deadline? : Option Nat := none) :
     IO (Array DataPoint × Option Nat × Option Nat) := do
   let ladder := paramLadder spec.config
   let mut points : Array DataPoint := #[]
@@ -315,6 +335,7 @@ private def runDoublingProbe (spec : BenchmarkSpec) :
   let mut firstFail : Option Nat := none
   for param in ladder do
     if firstFail.isSome then break
+    if (← deadlineReached deadline?) then break
     let dp ← runOneBatch spec param
     points := points.push dp
     match dp.status with
@@ -371,8 +392,17 @@ def annotateBelowSignalFloor (multiplier : Float)
     whether the user happened to register a cold-mode benchmark
     first. With warm + tiny target the autotuner converges in a
     single iteration and the wallclock is dominated by spawn /
-    process-init / IPC, which is exactly what we want to report. -/
-def measureSpawnFloor : IO (Option Nat) := do
+    process-init / IPC, which is exactly what we want to report.
+
+    `deadline?` is honoured — when the suite-budget deadline has
+    already passed, the probe is skipped and `none` is returned.
+    Without this, the spawn-floor child would be the only spawn in
+    `runBenchmark` not bounded by the suite deadline (issue #9 review:
+    Codex flagged it as the missing slack vector). The downstream
+    advisory pipeline already handles `none` gracefully — it just
+    omits the per-spawn floor line and the below-floor flagging. -/
+def measureSpawnFloor (deadline? : Option Nat := none) : IO (Option Nat) := do
+  if (← deadlineReached deadline?) then return none
   let entries ← allRuntimeEntries
   if entries.isEmpty then return none
   let entry := entries[0]!
@@ -394,8 +424,16 @@ def measureSpawnFloor : IO (Option Nat) := do
     via `setup_benchmark`. The merged config is validated before any
     subprocesses spawn, so e.g. a negative `--max-seconds-per-call`
     or `paramFloor > paramCeiling` produces a user-facing error rather
-    than an empty ladder. -/
-def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
+    than an empty ladder.
+
+    `deadline?` is the issue-#9 suite-budget hook: an absolute
+    monotonic-nanos timestamp past which no further ladder rungs
+    will be dispatched. The in-flight rung still runs to completion
+    (bounded by `maxSecondsPerCall`); subsequent rungs are skipped.
+    `none` (the default) disables the deadline check, restoring the
+    pre-#9 behaviour for the non-budgeted `run` path. -/
+def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
+    (deadline? : Option Nat := none) :
     IO BenchmarkResult := do
   let some entry ← findRuntimeEntry name
     | throw (.userError s!"unregistered benchmark: {name}")
@@ -413,11 +451,12 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   match schedule with
   | .custom params =>
     for n in params do
+      if (← deadlineReached deadline?) then break
       let dp ← runOneBatch spec n
       points := points.push dp
       if dp.status != .ok then break
   | _ =>
-    let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec
+    let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec deadline?
     points := probePoints
     match schedule with
     | .doubling => pure ()
@@ -444,6 +483,7 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
           -- don't enter `cMin`/`cMax`/slope.
           points := points.map ({ · with partOfVerdict := false })
           for n in rungs do
+            if (← deadlineReached deadline?) then break
             let dp ← runOneBatch spec n
             points := points.push dp
             if dp.status != .ok then break
@@ -452,7 +492,7 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
         -- Fall back to doubling-only — probe rows already have
         -- `partOfVerdict := true`.
         pure ()
-  let spawnFloor ← measureSpawnFloor
+  let spawnFloor ← measureSpawnFloor deadline?
   -- Annotate below-floor rows BEFORE summarising so the verdict
   -- ratios and the advisory list see the same filtered view.
   let annotated :=
@@ -595,9 +635,16 @@ private def computeHashAgreement (points : Array FixedDataPoint) : Bool := Id.ru
 
 /-- Run one fixed benchmark end-to-end: optional warmup, then
     `cfg.repeats` measured calls. Each measured call is its own
-    child spawn so the kill-on-cap machinery covers it. -/
+    child spawn so the kill-on-cap machinery covers it.
+
+    `deadline?` mirrors the parametric path: a monotonic-nanos
+    absolute timestamp past which no further repeats will be
+    dispatched. The in-flight repeat finishes (bounded by
+    `maxSecondsPerCall`) and any subsequent repeats are skipped.
+    Used by the issue-#9 budgeted-suite scheduler. -/
 def runFixedBenchmark (name : Lean.Name)
-    (override : FixedConfigOverride := {}) : IO FixedResult := do
+    (override : FixedConfigOverride := {})
+    (deadline? : Option Nat := none) : IO FixedResult := do
   let some entry ← findFixedRuntimeEntry name
     | throw (.userError s!"unregistered fixed benchmark: {name}")
   let cfg := override.apply entry.spec.config
@@ -608,10 +655,11 @@ def runFixedBenchmark (name : Lean.Name)
   -- fails, but we do propagate killed/error status so the user sees
   -- it (recorded as repeatIndex = 0 in the warmup pass — but not
   -- pushed into `points`).
-  if cfg.warmup then
+  if cfg.warmup ∧ !(← deadlineReached deadline?) then
     let _ ← runFixedOneBatch entry.spec cfg 0
   let mut points : Array FixedDataPoint := #[]
   for i in [0 : cfg.repeats] do
+    if (← deadlineReached deadline?) then break
     let dp ← runFixedOneBatch entry.spec cfg i
     points := points.push dp
   let okNanos : Array Nat := points.filterMap fun dp =>

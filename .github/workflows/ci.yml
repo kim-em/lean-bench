@@ -65,6 +65,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/schema_benchmark_test
 
+      - name: ci-budgeted suite test (issue #9: --total-seconds, budget_status)
+        shell: bash
+        run: ./.lake/build/bin/suite_benchmark_test
+
       - name: end-to-end run/compare test
         shell: bash
         run: ./.lake/build/bin/e2e_benchmark_test
@@ -102,6 +106,25 @@ jobs:
             --param-ceiling 256 \
             --param-schedule doubling \
             --slope-tolerance 0.5
+
+      # CI-budgeted suite smoke test (issue #9). Exercises the
+      # `suite` subcommand end-to-end including the `--export` JSONL
+      # path against a real registry. We pick a `--total-seconds`
+      # value generous enough that at least one benchmark completes
+      # — that's the row tooling cares about. The synthetic
+      # skip-row shape has dedicated coverage in
+      # `suite_benchmark_test`; this CI step's job is to confirm the
+      # CLI wiring (parser, exporter, file write) works end-to-end on
+      # every supported platform.
+      - name: fib example suite with CLI budget
+        shell: bash
+        run: |
+          ./.lake/build/bin/fib_benchmark_example suite \
+            --total-seconds 10 \
+            --max-seconds-per-call 0.5 \
+            --param-ceiling 256 \
+            --export suite-results.jsonl
+          grep -q '"budget_status":"completed"' suite-results.jsonl
 
       - name: sort example list & verify
         shell: bash

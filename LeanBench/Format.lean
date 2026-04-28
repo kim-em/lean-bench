@@ -479,5 +479,48 @@ def fmtComparison (rep : ComparisonReport) : String := Id.run do
       "  (only result hashes are available; see doc/quickstart.md for what to expect)"
   return "\n".intercalate lines.toList
 
+/-- Render a CI-budgeted suite run (issue #9). The report combines a
+    per-benchmark block (the existing `fmtResult` / `fmtFixedResult`
+    layout, indented under a `[completed: <name>]` header) with a
+    summary line listing skipped benchmarks and the totals.
+
+    Skipped entries are not folded into the per-benchmark blocks;
+    they only appear on the summary so the body stays readable when
+    most of a large suite was skipped. -/
+def fmtSuiteReport (report : SuiteReport) : String := Id.run do
+  let mut lines : Array String := #[]
+  lines := lines.push s!"suite: {fmtFloat3 report.budget.totalSeconds}s budget, {fmtFloat3 report.elapsedSeconds}s elapsed"
+  lines := lines.push s!"  {report.completedCount} completed, {report.skippedCount} skipped (of {report.entries.size} registered)"
+  lines := lines.push ""
+  for entry in report.entries do
+    match entry.budgetStatus with
+    | .completed =>
+      match entry.parametric?, entry.fixed? with
+      | some r, _ =>
+        lines := lines.push s!"[completed: {entry.function}    {fmtFloat3 entry.elapsedSeconds}s]"
+        lines := lines.push (fmtResult r)
+        lines := lines.push ""
+      | _, some r =>
+        lines := lines.push s!"[completed: {entry.function}    {fmtFloat3 entry.elapsedSeconds}s]"
+        lines := lines.push (fmtFixedResult r)
+        lines := lines.push ""
+      | _, _ =>
+        -- A completed entry must carry one of the two payloads; this
+        -- arm only exists to satisfy the exhaustiveness checker for
+        -- the `Option × Option` match. If we ever see it the entry
+        -- is malformed — surface it loudly so the bug reaches a
+        -- reviewer rather than getting silently dropped.
+        lines := lines.push s!"[completed: {entry.function}  (internal: missing payload)]"
+        lines := lines.push ""
+    | .skipped =>
+      pure ()
+  let skipped := report.entries.filter (·.budgetStatus == .skipped)
+  if !skipped.isEmpty then
+    lines := lines.push "skipped:"
+    for entry in skipped do
+      let reason := entry.errorMessage?.getD "skipped: budget exhausted before start"
+      lines := lines.push s!"  {entry.function}    {reason}"
+  return "\n".intercalate lines.toList
+
 end Format
 end LeanBench

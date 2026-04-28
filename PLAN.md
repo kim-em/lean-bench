@@ -76,15 +76,22 @@ emits a divergence report whose earliest-divergence block carries a
 visible string preview of each implementation's return value at
 that param, in addition to the hash.
 
-## F7. CI-budget mode
+## F7. CI-budget mode (shipped — issue #9)
 
-`--total-seconds 60` flag on the parent: schedule whole-suite runs
-inside a wallclock budget, dropping families that don't fit and
-tagging them with `status: "budget_skip"` in the report.
-
-Acceptance: running with `--total-seconds 5` against a suite that
-would naturally take 60s emits some completed families and some
-`budget_skip` rows; total wall ≤ 5s + per-spawn floor.
+Implemented as a `suite` subcommand that runs the registered
+benchmark catalogue inside a fixed wall-clock budget supplied via
+`--total-seconds`. The scheduler walks the parametric registry first,
+then the fixed registry; each entry checks whether enough budget
+remains (`--min-per-benchmark-seconds`, default `0.1s`) and either
+runs with a deadline-aware ladder that aborts mid-walk once the
+budget is exhausted, or records `.skipped` with no measurement data.
+`--export FILE` writes a unified JSONL report (one row per
+measurement plus one synthetic skip row per deferred benchmark).
+Skip rows carry `"budget_status":"skipped"` plus a
+`"status":"error"` + explanatory `error:` shape so readers that
+don't understand `budget_status` still see the row as a non-success.
+See [`doc/quickstart.md#ci-budgeted-suite-mode`](doc/quickstart.md#ci-budgeted-suite-mode)
+and the `budget_status` row in [`doc/schema.md`](doc/schema.md).
 
 ## F8. `lake bench` Lake script
 

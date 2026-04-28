@@ -336,6 +336,95 @@ when dispatching a fixed benchmark.
 relative-timing line — each function's ratio against the first —
 which is the v0.2 hex use case for "this took ~2× FLINT."
 
+## CI-budgeted suite mode
+
+For CI you usually don't want to run a single benchmark — you want
+"as much of the suite as fits in N seconds, and tell me what was
+skipped." The `suite` subcommand is the dedicated entry point:
+
+```bash
+$ lake exe bench suite --total-seconds 60
+suite: 60.000s budget, 47.213s elapsed
+  3 completed, 1 skipped (of 4 registered)
+
+[completed: MyApp.fastSort    8.412s]
+... per-function block ...
+
+[completed: MyApp.binarySearch    11.207s]
+... per-function block ...
+
+[completed: MyApp.dictBuild    27.594s]
+... per-function block ...
+
+skipped (budget exhausted): MyApp.heavyFactor
+```
+
+The scheduler walks parametric registrations first, then fixed
+registrations. For each entry: if enough budget remains
+(`--min-per-benchmark-seconds`, default `0.1s`), it runs with a
+deadline-aware ladder that aborts further rungs once the suite
+deadline is past. Otherwise it's recorded as `skipped`. Total wall
+time is bounded by `--total-seconds + maxSecondsPerCall + a few
+hundred ms of process-spawn slack`, regardless of how many
+benchmarks are registered, so CI jobs get a predictable cap.
+
+### Machine-readable output
+
+`--export FILE` writes a unified JSONL report:
+
+```bash
+$ lake exe bench suite --total-seconds 60 --export results.jsonl
+```
+
+Each line is one of:
+
+- a parametric measurement row (the same shape the child emits, plus
+  `"budget_status":"completed"`),
+- a fixed measurement row (same idea),
+- a synthetic placeholder for a skipped benchmark, with
+  `"status":"error"`, `"error":"skipped: budget exhausted before start"`,
+  and `"budget_status":"skipped"`.
+
+Downstream tools that don't know about `budget_status` see the skip
+rows as ordinary error rows — which is morally correct (the work
+didn't complete). Tools that do understand `budget_status` should
+filter on it explicitly. See [`schema.md`](schema.md) for the full
+field contract.
+
+### CI integration examples
+
+GitHub Actions:
+
+```yaml
+- name: Run lean-bench suite (CI-budgeted)
+  run: |
+    ./.lake/build/bin/bench suite \
+      --total-seconds 300 \
+      --export results.jsonl
+
+- name: Upload results
+  uses: actions/upload-artifact@v4
+  with:
+    name: bench-results
+    path: results.jsonl
+```
+
+GitLab CI:
+
+```yaml
+benchmark:
+  script:
+    - ./.lake/build/bin/bench suite --total-seconds 300 --export results.jsonl
+  artifacts:
+    paths:
+      - results.jsonl
+```
+
+The exit code is `0` on success even when some benchmarks are
+skipped — the run completed within budget, which is what CI cares
+about. Use the JSONL output (or count `[completed: ...]` lines in
+the terminal output) to check coverage.
+
 ## Caveats
 
 - The wallclock cap is enforced via a pure-Lean kill path

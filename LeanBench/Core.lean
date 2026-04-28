@@ -634,4 +634,113 @@ structure FixedComparisonReport where
   agreeOnHash   : FixedAgreementStatus
   deriving Inhabited
 
+/-! ## CI-budgeted suite mode (issue #9)
+
+A *suite* run schedules every registered benchmark inside a fixed
+wall-clock budget, completing as many as fit and explicitly marking
+the rest as skipped. The schema reserves a `budget_status` field on
+JSONL rows for exactly this purpose; see
+[`doc/schema.md`](../doc/schema.md). -/
+
+/-- Per-benchmark outcome inside a suite-budget run.
+
+`completed` — the benchmark started and produced a result. The result
+itself may carry advisories (`truncatedAtCap`, `belowSignalFloor`,
+…) just like a non-budgeted run; the suite-level `completed` tag
+only says "this benchmark got to run."
+
+`skipped` — the benchmark was queued but never started because the
+wall-clock budget was exhausted before the suite reached it. No
+measurement data is available; the entry exists so the report and
+exported JSONL explicitly account for the deferred work rather than
+silently dropping it. -/
+inductive BudgetStatus
+  | completed
+  | skipped
+  deriving Repr, Inhabited, BEq
+
+def BudgetStatus.toJsonString : BudgetStatus → String
+  | .completed => "completed"
+  | .skipped => "skipped"
+
+/-- Suite-budget run configuration.
+
+`totalSeconds` is the wall-clock budget for the whole suite.
+`minPerBenchmarkSeconds` is the smallest amount of remaining budget
+that justifies starting another benchmark — below it, the scheduler
+skips the remaining benchmarks rather than starting one it would
+almost-immediately have to abandon. The default `0.1s` is roughly the
+upper bound of the per-spawn floor on common CI hosts; lower it for
+very-fast suites or raise it for I/O-heavy fixed benchmarks where the
+bound is pessimistic. -/
+structure SuiteBudgetConfig where
+  totalSeconds           : Float
+  minPerBenchmarkSeconds : Float := 0.1
+  deriving Repr, Inhabited
+
+/-- One entry in a `SuiteReport`. When `budgetStatus = .completed`
+exactly one of `parametric?` / `fixed?` is populated; when
+`.skipped`, both are `none` and `errorMessage?` carries the reason
+(budget exhaustion, deadline-cut warmup, validation failure, …).
+The `kindStr` tag records which registry the entry came from even
+on skipped entries so the JSONL exporter can emit
+`"kind":"parametric"` / `"fixed"` without re-querying the registry. -/
+structure SuiteEntry where
+  function       : Lean.Name
+  /-- One of `Schema.kindParametric` / `Schema.kindFixed`. Stored
+      unparsed so the formatter and JSONL exporter don't depend on
+      `Schema`. -/
+  kindStr        : String
+  budgetStatus   : BudgetStatus
+  parametric?    : Option BenchmarkResult := none
+  fixed?         : Option FixedResult := none
+  /-- Wall time spent on this benchmark, in seconds. `0.0` for
+      `.skipped` entries. -/
+  elapsedSeconds : Float := 0.0
+  /-- Why this entry was skipped, if it was. Carried so the formatter
+      and JSONL exporter can surface a precise reason — "budget
+      exhausted before start" (the scheduler skipped this benchmark
+      outright), "deadline reached before first measurement" (the
+      benchmark started but produced no rows before the deadline cut
+      it off), or the text of an exception thrown by `runBenchmark` /
+      `runFixedBenchmark` (e.g. config validation failure). The
+      JSONL exporter writes this verbatim into the synthetic skip
+      row's `error` field, so downstream CI dashboards can
+      distinguish a true budget skip from a config bug.
+
+      `none` on a `.completed` entry; SHOULD be `some _` on a
+      `.skipped` entry, but consumers MUST tolerate `none` for
+      forward-compat with older suite reports. -/
+  errorMessage?  : Option String := none
+  deriving Inhabited
+
+/-- Summary of a CI-budgeted suite run.
+
+`elapsedSeconds` is the wall time the suite scheduler observed end
+to end (including overhead between benchmarks); it can exceed
+`budget.totalSeconds` by up to a single `maxSecondsPerCall` plus
+process-spawn slack — the scheduler aborts mid-benchmark via the
+deadline-aware ladder check in `runBenchmark` / `runFixedBenchmark`,
+not via signal-based cancellation.
+
+`entries` carries one entry per registered benchmark in the order the
+scheduler walked them (parametric registry first, then fixed
+registry; both in their internal iteration order). Skipped
+benchmarks appear at the end of `entries` because the scheduler walks
+the registries linearly and falls into the skip branch only after
+the budget runs out. -/
+structure SuiteReport where
+  budget         : SuiteBudgetConfig
+  elapsedSeconds : Float
+  entries        : Array SuiteEntry
+  deriving Inhabited
+
+/-- Number of completed entries in a suite run. -/
+def SuiteReport.completedCount (r : SuiteReport) : Nat :=
+  (r.entries.filter (·.budgetStatus == .completed)).size
+
+/-- Number of skipped entries in a suite run. -/
+def SuiteReport.skippedCount (r : SuiteReport) : Nat :=
+  (r.entries.filter (·.budgetStatus == .skipped)).size
+
 end LeanBench
