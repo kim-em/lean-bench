@@ -274,6 +274,91 @@ def testEmittedRowCarriesCacheMode : IO UInt32 := do
         return 1
   return 0
 
+/-! ## Edge interactions: kill cap + linear schedule -/
+
+namespace LeanBench.Test.CacheMode
+
+/-- Deliberately-slow benchmark to force the kill-on-cap path under
+    cold mode. The body burns enough CPU at `param ≥ 256` that a
+    single call exceeds 100ms; with `maxSecondsPerCall := 0` the
+    parent fires SIGTERM ~immediately. -/
+def coldKillFn (n : Nat) : UInt64 := Id.run do
+  let mut x : UInt64 := 0
+  for _ in [0:n] do
+    for _ in [0:100_000] do
+      x := x ^^^ n.toUInt64
+  return x
+
+setup_benchmark coldKillFn n => n where { cacheMode := .cold }
+
+/-- Linear-schedule cold-mode benchmark. Tiny work so the doubling
+    probe walks past `paramCeiling` cleanly and we can observe sweep
+    rows landing on `inner_repeats = 1` even under the linear
+    bracket. -/
+def coldLinearFn (n : Nat) : UInt64 := Id.run do
+  let mut x : UInt64 := 1
+  for _ in [0:n] do x := x ^^^ n.toUInt64
+  return x
+
+setup_benchmark coldLinearFn n => n where {
+  cacheMode := .cold
+  paramSchedule := .linear 4
+  paramCeiling := 16
+  maxSecondsPerCall := 0.5
+  targetInnerNanos := 50_000_000
+}
+
+end LeanBench.Test.CacheMode
+
+private def coldKillName : Lean.Name := `LeanBench.Test.CacheMode.coldKillFn
+private def coldLinearName : Lean.Name := `LeanBench.Test.CacheMode.coldLinearFn
+
+/-- The kill-on-cap path applies in cold mode too: the parent's
+    deadline is mode-agnostic, so a slow function under
+    `--cache-mode cold` with `maxSecondsPerCall := 0` still synthesises
+    a `killedAtCap` row rather than hanging. -/
+def testColdKillPathFires : IO UInt32 := do
+  match ← findRuntimeEntry coldKillName with
+  | none =>
+    IO.eprintln s!"FAIL: {coldKillName} unregistered"
+    return 1
+  | some entry =>
+    let tightCfg : BenchmarkConfig :=
+      { entry.spec.config with
+          maxSecondsPerCall := 0
+          killGraceMs := 100 }
+    let dp ← runOneBatch { entry.spec with config := tightCfg } 1_000_000
+    match dp.status with
+    | .killedAtCap => return 0
+    | s =>
+      IO.eprintln s!"FAIL: cold-mode kill expected killedAtCap, got {repr s}"
+      return 1
+
+/-- Cold mode under the linear schedule: every sweep row must still
+    land on `inner_repeats = 1`. Probe rows from the doubling probe
+    keep `partOfVerdict = false`; sweep rows keep `partOfVerdict =
+    true` and `inner_repeats = 1`. We don't pin which rungs land in
+    which bracket (that's the schedule's job, not the cache mode's),
+    only that no row escapes the cold path's "single invocation"
+    contract. -/
+def testColdUnderLinearScheduleSingleInvocation : IO UInt32 := do
+  let result ← runBenchmark coldLinearName
+  if result.points.isEmpty then
+    IO.eprintln "FAIL: cold+linear produced no points"
+    return 1
+  for dp in result.points do
+    -- Error / killed rows have inner_repeats = 0; ok rows MUST be 1.
+    if dp.status == .ok && dp.innerRepeats != 1 then
+      IO.eprintln s!"FAIL: cold+linear ok row has inner_repeats={dp.innerRepeats}; expected 1; row={repr dp}"
+      return 1
+  -- Sanity check: at least one ok row must be present, otherwise the
+  -- assertion above is vacuous.
+  let okCount := result.points.filter (·.status == .ok) |>.size
+  if okCount == 0 then
+    IO.eprintln s!"FAIL: cold+linear had no ok rows; points={repr result.points}"
+    return 1
+  return 0
+
 def testParseToleratesMissingCacheMode : IO UInt32 := do
   -- Hand-rolled fixtures and pre-issue-12 rows omit `cache_mode`.
   -- The parser must still succeed (additive optional field).
@@ -304,6 +389,8 @@ def runTests : IO UInt32 := do
       ("behaviour.coldOneInnerRepeat",     testColdRunHasOneInnerRepeat),
       ("behaviour.warmAutotunes",          testWarmRunAutotunes),
       ("behaviour.cliColdOverride",        testCliColdOverrideTakesEffect),
+      ("edges.coldKillPathFires",          testColdKillPathFires),
+      ("edges.coldLinearSingleInvocation", testColdUnderLinearScheduleSingleInvocation),
       ("wire.rowCarriesCacheMode",         testEmittedRowCarriesCacheMode),
       ("wire.parseToleratesMissing",       testParseToleratesMissingCacheMode) ]
   do

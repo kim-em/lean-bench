@@ -202,7 +202,7 @@ def testFmtFixedSpec : IO UInt32 := do
 
 def testFmtResult : IO UInt32 := do
   let expected :=
-    "Sample.linearFn    expected complexity: n\n" ++
+    "Sample.linearFn    expected complexity: n    [warm cache]\n" ++
     "  param  per-call    repeats  C\n" ++
     "      2   25.000 ns  ×2^2     C=12.500\n" ++
     "      4   50.000 ns  ×2^2     C=12.500\n" ++
@@ -210,16 +210,32 @@ def testFmtResult : IO UInt32 := do
     "  verdict: consistent with declared complexity (cMin=12.500, cMax=12.500, β=+0.000)"
   snapshot "fmtResult" expected (Format.fmtResult sampleResult)
 
+/-- Cold-mode snapshot. Exercises the same code path as `fmtResult`
+    above, but with the `[cold cache]` tag swapped in. Pinned so a
+    silent regression that drops the cold tag (or accidentally tags
+    every result as warm) breaks here. -/
+def testFmtResultCold : IO UInt32 := do
+  let coldResult : BenchmarkResult :=
+    { sampleResult with config := { sampleResult.config with cacheMode := .cold } }
+  let expected :=
+    "Sample.linearFn    expected complexity: n    [cold cache]\n" ++
+    "  param  per-call    repeats  C\n" ++
+    "      2   25.000 ns  ×2^2     C=12.500\n" ++
+    "      4   50.000 ns  ×2^2     C=12.500\n" ++
+    "      8  100.000 ns  ×2^2     C=12.500\n" ++
+    "  verdict: consistent with declared complexity (cMin=12.500, cMax=12.500, β=+0.000)"
+  snapshot "fmtResult.cold" expected (Format.fmtResult coldResult)
+
 def testFmtComparison : IO UInt32 := do
   let expected :=
-    "Sample.linearFn    expected complexity: n\n" ++
+    "Sample.linearFn    expected complexity: n    [warm cache]\n" ++
     "  param  per-call    repeats  C\n" ++
     "      2   25.000 ns  ×2^2     C=12.500\n" ++
     "      4   50.000 ns  ×2^2     C=12.500\n" ++
     "      8  100.000 ns  ×2^2     C=12.500\n" ++
     "  verdict: consistent with declared complexity (cMin=12.500, cMax=12.500, β=+0.000)\n" ++
     "\n" ++
-    "Sample.otherFn    expected complexity: n\n" ++
+    "Sample.otherFn    expected complexity: n    [warm cache]\n" ++
     "  param  per-call    repeats  C\n" ++
     "      2   50.000 ns  ×2^2     C=25.000\n" ++
     "      4  100.000 ns  ×2^2     C=25.000\n" ++
@@ -351,6 +367,7 @@ def main : IO UInt32 := do
       ("fmtSpec.noHash", testFmtSpecNoHash),
       ("fmtFixedSpec", testFmtFixedSpec),
       ("fmtResult", testFmtResult),
+      ("fmtResult.cold", testFmtResultCold),
       ("fmtComparison", testFmtComparison),
       ("fmtComparison.multi", testFmtComparisonMulti),
       ("fmtComparison.hashUnavailable", testFmtComparisonHashUnavailable),

@@ -96,10 +96,14 @@ measured is the asymptotic cost of the algorithm under hot
 microarchitectural state.
 
 `.cold` respawns the child for every ladder rung and runs the
-function exactly once per spawn, so cache state is not preserved
-across measurements. What's measured includes cache refill, branch
-predictor warmup, allocator first-touch, and any per-call overhead
-the warm path amortises away.
+function exactly once per spawn, so the harness no longer
+intentionally preserves intra-child state across measurements.
+What's measured includes cache refill, branch-predictor warmup,
+allocator first-touch, and any per-call overhead the warm path
+amortises away. Note that "cold" here means "no harness-side
+warmup," not "guaranteed cold hardware" — the OS / CPU may still
+carry parts of the working set across spawns; see
+`doc/advanced.md#cache-modes`.
 
 Neither mode is "more correct" — they measure different things. Read
 the docs in `doc/advanced.md#cache-modes` for when each is

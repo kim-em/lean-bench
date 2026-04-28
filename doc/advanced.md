@@ -126,16 +126,23 @@ model.
 
 **Cold mode** respawns the child for every rung of the ladder and
 runs the function exactly once per spawn (`inner_repeats := 1`,
-`auto-tune` skipped). Each measurement starts on a process whose
-caches have not seen the previous rung's data; whatever the runtime
-amortises in the warm path you pay in full here. The reported
-per-call time includes cache refill, branch predictor warmup,
-allocator first-touch, and any per-call setup that the warm loop's
-auto-tuner would otherwise hide. This is what you want when you're
-investigating locality (does the working set fit in L1/L2?),
-first-touch costs (is page-fault overhead dominating?), or whether
-the warm steady-state numbers under-report what a real workload
-will see.
+`auto-tune` skipped). The harness no longer intentionally preserves
+intra-child state across measurements; whatever the warm loop
+amortises across many iterations of one process you pay in full
+here. The reported per-call time includes cache refill of whatever
+the previous spawn evicted, branch-predictor warmup, allocator
+first-touch, and any per-call setup that the auto-tuner would hide.
+This is what you want when you're investigating locality (does the
+working set fit in L1/L2?), first-touch costs, or whether the warm
+steady-state numbers under-report what a real workload will see.
+
+Note: cold mode is "no harness-side warmup," not "guaranteed cold
+hardware." The OS can still keep recently-touched pages, the CPU
+front-end can still hold recently-decoded code, and a system under
+light load may carry parts of the working set across processes.
+Spawning a fresh process is a strong knob, not a deterministic
+flush — read it as "we are no longer doing anything to keep the
+caches warm," not "we have evicted them."
 
 The trade-off: cold measurements are noisier per data point. With
 `inner_repeats := 1`, the per-spawn floor and OS jitter both fall on
