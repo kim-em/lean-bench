@@ -96,19 +96,31 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
     stderr := .piped
     stdin := .null
   }
+  -- Drain stderr concurrently so a chatty child can't fill the pipe
+  -- buffer and deadlock its own write — the parent would then
+  -- misreport the child as timing out / killed at cap. Whatever the
+  -- child wrote to stderr is appended to the synthesized error row
+  -- when the child exits non-zero.
+  let stderrTask ← child.stderr.readToEnd.asTask
   let stdout ← child.stdout.readToEnd
   let exit ← child.wait
+  let stderrText : String :=
+    match stderrTask.get with
+    | .ok s => s.trimAscii.toString
+    | .error _ => ""
+  let withStderr (msg : String) : String :=
+    if stderrText.isEmpty then msg else s!"{msg}; stderr: {stderrText}"
   match exit with
   | 0 =>
     let line := stdout.trimAscii.toString
     if line.isEmpty then
-      return synthRow param (.error "child exited 0 but produced no output")
+      return synthRow param (.error (withStderr "child exited 0 but produced no output"))
     match parseChildRow line with
     | .ok row => return row
-    | .error e => return synthRow param (.error s!"parse: {e}")
+    | .error e => return synthRow param (.error (withStderr s!"parse: {e}"))
   | 124 => return synthRow param .killedAtCap
   | 137 => return synthRow param .killedAtCap
-  | other => return synthRow param (.error s!"child exited with code {other}")
+  | other => return synthRow param (.error (withStderr s!"child exited with code {other}"))
 
 /-- Doubling ladder from floor through ceiling. -/
 def paramLadder (cfg : BenchmarkConfig) : Array Nat := Id.run do

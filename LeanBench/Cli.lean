@@ -4,6 +4,7 @@ import LeanBench.Env
 import LeanBench.Run
 import LeanBench.Child
 import LeanBench.Compare
+import LeanBench.Verify
 import LeanBench.Format
 
 /-!
@@ -18,8 +19,8 @@ runner). Subcommand layout:
 | `./bench`                                                       | parent: print all registered benchmark names |
 | `./bench list`                                                  | parent: same |
 | `./bench run NAME`                                              | parent: run one benchmark, print report |
-| `./bench compare A B C`                                         | parent: TODO v0.1 — comparison report |
-| `./bench verify`                                                | parent: TODO — `f 0` and `f 1` sanity check via children |
+| `./bench compare A B C`                                         | parent: comparison report |
+| `./bench verify [NAMES…]`                                        | parent: bounded `f 0` / `f 1` sanity check via children |
 | `./bench _child --bench NAME --param N --target-nanos T`        | child: one inner-tuned batch, print one JSONL row, exit |
 
 CLI parsing uses `Cli` (mhuisi/lean4-cli).
@@ -56,6 +57,16 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   let report ← LeanBench.compare (names.map String.toName)
   IO.println (Format.fmtComparison report)
   return 0
+
+def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
+  let names := p.variableArgsAs! String |>.toList |>.map Lean.Name.mkSimple
+  match ← (LeanBench.verify names |>.toBaseIO) with
+  | .error e =>
+    IO.eprintln s!"verify: {e.toString}"
+    return (1 : UInt32)
+  | .ok reports =>
+    IO.println (Format.fmtVerify reports)
+    return if reports.all (·.passed) then (0 : UInt32) else (1 : UInt32)
 
 /-! ## Subcommand handler (child side) -/
 
@@ -98,6 +109,14 @@ def compareSub : Cmd := `[Cli|
     ...names : String;     "Two or more benchmark names (variadic)."
 ]
 
+def verifySub : Cmd := `[Cli|
+  verify VIA runVerifyCmd; ["0.1.0"]
+  "Sanity-check registered benchmarks (f 0, f 1 via the child path). Verifies all benchmarks if no names are given. Exit code is non-zero on any failure."
+
+  ARGS:
+    ...names : String;     "Optional: benchmark names to verify; verify all if omitted."
+]
+
 /-- Top-level dispatcher; the user calls this as their `main`. -/
 def topCmd : Cmd := `[Cli|
   bench NOOP; ["0.1.0"]
@@ -107,6 +126,7 @@ def topCmd : Cmd := `[Cli|
     listSub;
     runSub;
     compareSub;
+    verifySub;
     childSub
 ]
 

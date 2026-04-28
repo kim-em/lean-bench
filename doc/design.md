@@ -90,8 +90,9 @@ branching leaking through the design.
   choice in the original draft: it makes the elaborator depend on
   the compiled binary, which is circular and phase-dependent. v0.1
   static checks only verify symbol existence, arity, and complexity
-  type. Compiled-code sanity checks live in `lean-bench verify` (a
-  CLI subcommand, not yet implemented).
+  type. Compiled-code sanity checks live in `lean-bench verify`,
+  which spawns the existing child path against `f 0` and `f 1` for
+  each registered benchmark and reports any non-`ok` rows.
 
 - **Strong verdict labels.** The verdict fits the log-log slope β of
   `C` vs `param` over the trimmed tail (leading 20% of ratios

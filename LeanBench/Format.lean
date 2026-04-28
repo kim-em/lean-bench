@@ -1,5 +1,6 @@
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.Verify
 
 /-!
 # `LeanBench.Format` — printers
@@ -200,6 +201,33 @@ def fmtResult (r : BenchmarkResult) : String := Id.run do
 def fmtSpec (spec : BenchmarkSpec) : String :=
   let h := if spec.hashable then "" else "  (no Hashable)"
   s!"  {spec.name}    expected complexity: {spec.complexityFormula}{h}"
+
+/-- Render one verify report. Passing reports render as a single
+    line. Failing reports render as a header line followed by one
+    indented line per failed check, so users see every distinct
+    failure (e.g. `f 0` and `f 1` may fail for different reasons). -/
+def fmtVerifyReport (r : VerifyReport) : String :=
+  if r.passed then
+    s!"  [ok ] {r.spec.name}"
+  else
+    let header := s!"  [FAIL] {r.spec.name}"
+    let failures := r.checks.filterMap (·.failure)
+    let body := failures.toList.map (fun msg => s!"         —  {msg}")
+    "\n".intercalate (header :: body)
+
+/-- Render the full verify summary for a list of reports. -/
+def fmtVerify (reports : Array VerifyReport) : String := Id.run do
+  if reports.isEmpty then
+    return "(no benchmarks registered)"
+  let mut lines : Array String := #[s!"verifying {reports.size} benchmark(s)..."]
+  for r in reports do
+    lines := lines.push (fmtVerifyReport r)
+  let failed := reports.filter (! ·.passed) |>.size
+  let summary :=
+    if failed == 0 then s!"all {reports.size} benchmark(s) passed"
+    else s!"{failed} of {reports.size} benchmark(s) failed verification"
+  lines := lines.push summary
+  return "\n".intercalate lines.toList
 
 /-- Render a `ComparisonReport` as a per-function block list plus a
     summary noting the common-param intersection. -/

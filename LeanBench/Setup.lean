@@ -27,7 +27,8 @@ It auto-generates two top-level defs and a single `register` call.
 There is intentionally **no** elaboration-time subprocess spawning;
 Codex review identified that as the worst design choice in the
 original draft (circular and phase-dependent). Compiled-code sanity
-checks live in `lean-bench verify` (a CLI subcommand) instead.
+checks live in `lean-bench verify` (a CLI subcommand) — see
+[`LeanBench.Verify`](Verify.lean).
 
 The `where { ... }` clause for overriding `BenchmarkConfig` defaults
 is on the v0.2 roadmap; in v0.1 every benchmark uses default config.

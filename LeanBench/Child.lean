@@ -128,7 +128,12 @@ def emitRow
     ] ++ "}"
   IO.println row
 
-/-- Top-level child entry point. -/
+/-- Top-level child entry point.
+
+    Catches exceptions thrown by the runner (e.g. a panicking
+    function-under-test) and emits a structured `error` row so the
+    parent — and `verify` in particular — can show the failure
+    reason rather than just an exit code. -/
 def runChildMode (benchName : Lean.Name) (param targetNanos : Nat) : IO UInt32 := do
   match ← findRuntimeEntry benchName with
   | none =>
@@ -137,9 +142,14 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat) : IO UInt32 :
       (some s!"unregistered benchmark: {benchName}")
     return 1
   | some entry =>
-    let loop ← entry.runner param
-    let (count, total, hash) ← autoTune loop targetNanos
-    emitRow benchName param count total hash .ok
-    return 0
+    try
+      let loop ← entry.runner param
+      let (count, total, hash) ← autoTune loop targetNanos
+      emitRow benchName param count total hash .ok
+      return (0 : UInt32)
+    catch e =>
+      let msg := s!"runner threw: {e.toString}"
+      emitRow benchName param 0 0 none (.error msg) (some msg)
+      return (1 : UInt32)
 
 end LeanBench
