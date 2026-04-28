@@ -73,6 +73,14 @@ def testSplitTags : IO UInt32 := do
   -- Extra commas are filtered.
   let sparse := LeanBench.Cli.splitTags "a,,b,"
   expectEq "splitTags.sparse" sparse #["a", "b"]
+  -- Whitespace is trimmed.
+  let spaced := LeanBench.Cli.splitTags "sort, fast"
+  expectEq "splitTags.spaced" spaced #["sort", "fast"]
+  let padded := LeanBench.Cli.splitTags "  a , b  "
+  expectEq "splitTags.padded" padded #["a", "b"]
+  -- All-whitespace segments are dropped.
+  let blanks := LeanBench.Cli.splitTags " , , "
+  expectEq "splitTags.blanks" blanks (#[] : Array String)
   IO.println "  ok  tags.splitTags"
   return 0
 
