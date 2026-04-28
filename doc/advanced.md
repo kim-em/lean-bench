@@ -6,7 +6,7 @@ v0.1; v0.2+ items live in [PLAN.md](../PLAN.md).
 ## Comparing implementations
 
 `lake exe bench compare A B C [...]` runs each named benchmark
-through its own doubling ladder, then prints:
+through its own (auto-picked) ladder, then prints:
 
 - the full per-function table (one block per benchmark)
 - the `commonParams` intersection (the params at which every
@@ -59,6 +59,16 @@ claim. Things that produce an inconclusive verdict:
 - arbitrary-precision arithmetic on growing results (Lean's `Nat`
   is bignum; if `f n` returns a number with k bits, every operation
   on it costs O(k))
+
+For exponential complexity, the verdict's β line shows `—` because
+the slope fit is rejected for narrow log-x ranges (the fit would be
+ill-conditioned). The `cMin/cMax` range check takes over: the
+verdict is consistent iff `cMax/cMin ≤ max(narrowRangeNoiseFloor,
+exp(slopeTolerance · xRange))`. Default `narrowRangeNoiseFloor = 1.50`
+admits the 15-25% spread that single-shot near-cap measurements show
+on noisy hardware. Tighten if you want to discriminate finer model
+differences and accept the false-negative rate; widen further on
+chronically noisier hardware.
 
 β tells you the direction; the raw ratios tell you the magnitude.
 Together they're enough to tell "off by a polynomial factor" from

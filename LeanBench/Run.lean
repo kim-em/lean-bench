@@ -6,21 +6,33 @@ import LeanBench.Stats
 /-!
 # `LeanBench.Run` — parent-side orchestration
 
-For each param in the doubling ladder:
+For each param in the chosen ladder shape (`ParamSchedule`), spawn
+the same binary as a child:
 
-1. Spawn the same binary as a child (`_child --bench NAME --param N
-   --target-nanos T`) with a wallclock cap enforced via the POSIX
-   `timeout(1)` utility. We delegate the kill semantics to coreutils
-   on purpose — it's simpler and more reliable than rolling our own
-   SIGTERM/SIGKILL escalation in Lean. (Linux/macOS only; documented.)
+1. `timeout(1)` enforces the wallclock cap (Linux/macOS; we delegate
+   kill semantics to coreutils rather than rolling SIGTERM/SIGKILL
+   escalation in Lean).
 2. Read the child's stdout (one JSONL row).
-3. If the child exited 0 with a parseable row → use it.
-   If `timeout` returned 124 (graceful timeout) or 137 (SIGKILL after
-   `--kill-after`) → synthesize a `killedAtCap` row.
-   If the child died otherwise → synthesize an `error` row.
-4. Stop doubling once the param hits `paramCeiling` or any single
-   batch returns a non-`ok` status.
-5. Hand the points to `Stats.summarize` for ratio + verdict.
+3. Exit 0 + parseable row → use it; 124/137 → `killedAtCap`; other →
+   `error`.
+4. Doubling stops at `paramCeiling` or any non-`ok` status.
+
+Two ladder shapes:
+
+- **Doubling** (`.doubling`): walk `paramFloor, 1, 2, 4, …` up to
+  `paramCeiling`. Right for polynomial complexity.
+- **Linear** (`.linear samples`): doubling probe brackets the
+  productive band `(lastOk, firstFail)`, then `samples` rungs are
+  evenly spaced strictly inside that bracket. Probe rows get
+  `partOfVerdict := false` so they don't corrupt `cMin/cMax`/slope;
+  sweep rows get `partOfVerdict := true`. Right for exponential
+  complexity, where the cap kills doubling within 1–2 useful rungs.
+
+`.auto` (the default) inspects the declared complexity at runtime
+and resolves to one of the above by comparing `complexity(64) /
+complexity(32)` against `complexity(16) / complexity(8)`: for any
+`n^k` they're equal (→ doubling); for any `b^n` the former dominates
+(→ linear).
 -/
 
 open Lean
@@ -73,7 +85,7 @@ def parseChildRow (line : String) : Except String DataPoint := do
 /-- Synthesize a row when the child died before emitting. -/
 def synthRow (param : Nat) (status : Status) : DataPoint :=
   { param, innerRepeats := 0, totalNanos := 0, perCallNanos := 0.0
-  , resultHash := none, status }
+  , resultHash := none, status, partOfVerdict := true }
 
 /-- Spawn one child invocation and return the resulting DataPoint. -/
 def runOneBatch (spec : BenchmarkSpec) (param : Nat) : IO DataPoint := do
@@ -124,6 +136,97 @@ def paramLadder (cfg : BenchmarkConfig) : Array Nat := Id.run do
       acc := acc.push p
   return acc
 
+/-- Doubling-rate-of-doubling-rate test for "is this complexity
+    super-polynomial?" Compares `complexity(64)/complexity(32)`
+    against `complexity(16)/complexity(8)`: equal for any `n^k`,
+    grows geometrically for any `b^n` with `b > 1`. The threshold
+    of 4× catches even mild exponentials like `(1.1)^n` while
+    leaving high-degree polynomials and slow growers on doubling.
+
+    Denominators are clamped to `≥ 1` so that complexity functions
+    that bottom out at 0 don't divide by zero. -/
+private def autoPicksLinear (complexity : Nat → Nat) : Bool :=
+  let c8  := (max 1 (complexity 8)).toFloat
+  let c16 := (complexity 16).toFloat
+  let c32 := (max 1 (complexity 32)).toFloat
+  let c64 := (complexity 64).toFloat
+  let r8  := c16 / c8
+  let r32 := c64 / c32
+  r32 ≥ 4.0 * r8
+
+/-- Estimate the largest `n` past `lastOk` whose run cost should fit
+    within `capNanos`, extrapolating from `lastOk`'s observed per-call
+    cost via the declared complexity model:
+
+    ```
+    predicted(n) ≈ lastOkPerCallNanos × complexity(n) / complexity(lastOk)
+    ```
+
+    Returns the first `n ∈ (lastOk, probedFirstFail)` where
+    `predicted(n) > safety × capNanos`, or `probedFirstFail` if none.
+    The doubling probe's `firstFail` overshoots the real boundary by
+    up to a factor of two (cost doubles per `n` doubling for any
+    polynomial; far more for an exponential), so this refinement
+    matters: without it, an exponential benchmark wastes most of its
+    sweep budget on rungs guaranteed to hit the cap. -/
+private def estimateFirstFail (complexity : Nat → Nat)
+    (lastOk : Nat) (lastOkPerCallNanos : Float)
+    (capNanos : Float) (probedFirstFail : Nat) : Nat :=
+  let safety : Float := 0.7
+  let lastOkComp := (max 1 (complexity lastOk)).toFloat
+  let perUnit := lastOkPerCallNanos / lastOkComp
+  Id.run do
+    let mut n := lastOk + 1
+    while n < probedFirstFail do
+      if perUnit * (complexity n).toFloat > safety * capNanos then return n
+      n := n + 1
+    return probedFirstFail
+
+/-- Linear sweep rungs strictly inside `(lastOk, firstFail)`, stride 1,
+    capped at `samples` rungs from the bottom of the bracket.
+
+    With a complexity-tightened `firstFail` the bracket is narrow enough
+    that stride 1 gives the maximum useful samples without wasting runs
+    on rungs that would hit the cap. Returns `#[]` when the bracket is
+    empty. -/
+private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
+  if firstFail ≤ lastOk + 1 || samples = 0 then #[] else
+    let last := min (firstFail - 1) (lastOk + samples)
+    (Array.range (last - lastOk)).map (lastOk + 1 + ·)
+
+/-- Run the static doubling ladder. Returns `(points, lastOk?, firstFail?)`:
+
+- `lastOk?` is the largest param whose status was `.ok` (none if no row
+  was ok),
+- `firstFail?` is the first param after `lastOk` whose status was non-ok
+  (none if the ladder ran to ceiling without failing).
+
+Probe rows are returned with whatever `partOfVerdict` `runOneBatch`
+chose (defaults to true); the caller flips them as needed. -/
+private def runDoublingProbe (spec : BenchmarkSpec) :
+    IO (Array DataPoint × Option Nat × Option Nat) := do
+  let ladder := paramLadder spec.config
+  let mut points : Array DataPoint := #[]
+  let mut lastOk : Option Nat := none
+  let mut firstFail : Option Nat := none
+  for param in ladder do
+    if firstFail.isSome then break
+    let dp ← runOneBatch spec param
+    points := points.push dp
+    match dp.status with
+    | .ok => lastOk := some param
+    | _   => firstFail := some param
+  return (points, lastOk, firstFail)
+
+/-- Resolve `.auto` to either `.doubling` or a sensible `.linear`. -/
+private def resolveSchedule (cfg : BenchmarkConfig) (complexity : Nat → Nat) :
+    ParamSchedule :=
+  match cfg.paramSchedule with
+  | .doubling => .doubling
+  | .linear samples => .linear samples
+  | .auto =>
+    if autoPicksLinear complexity then .linear 16 else .doubling
+
 /-- Measure the per-spawn floor: spawn the child against the first
     available benchmark with a 1µs target. The result is dominated by
     spawn cost when the inner work is trivial. -/
@@ -136,20 +239,48 @@ def measureSpawnFloor : IO (Option Nat) := do
   let t₁ ← IO.monoNanosNow
   return some (t₁ - t₀)
 
-/-- Run one benchmark end-to-end. -/
+/-- Run one benchmark end-to-end: resolve the schedule, run the
+    doubling probe, optionally do a bracket-internal linear sweep,
+    then summarise. -/
 def runBenchmark (name : Lean.Name) : IO BenchmarkResult := do
   let some entry ← findRuntimeEntry name
     | throw (.userError s!"unregistered benchmark: {name}")
-  let ladder := paramLadder entry.spec.config
-  let mut points : Array DataPoint := #[]
-  let mut continueLadder := true
-  for param in ladder do
-    if !continueLadder then break
-    let dp ← runOneBatch entry.spec param
-    points := points.push dp
-    match dp.status with
-    | .ok => pure ()
-    | _ => continueLadder := false
+  let schedule := resolveSchedule entry.spec.config entry.complexity
+  let (probePoints, lastOk?, firstFail?) ← runDoublingProbe entry.spec
+  let mut points := probePoints
+  match schedule with
+  | .doubling => pure ()
+  | .auto => pure ()  -- unreachable after resolveSchedule
+  | .linear samples =>
+    match lastOk?, firstFail? with
+    | some lastOk, some firstFail =>
+      -- Tighten the bracket using the complexity model + observed
+      -- cost at `lastOk`, so we don't burn the sweep budget on rungs
+      -- that are guaranteed to hit the cap.
+      let lastOkPerCall : Float :=
+        (probePoints.findSome? fun dp =>
+            if dp.param == lastOk && dp.status == .ok then
+              some dp.perCallNanos
+            else none).getD 0.0
+      let capNanos : Float :=
+        entry.spec.config.maxSecondsPerCall.toFloat * 1.0e9
+      let effFirstFail :=
+        estimateFirstFail entry.complexity lastOk lastOkPerCall
+          capNanos firstFail
+      let rungs := pickLinearRungs lastOk effFirstFail samples
+      if !rungs.isEmpty then
+        -- Probe rows are bracket-finding only; demote them so they
+        -- don't enter `cMin`/`cMax`/slope.
+        points := points.map ({ · with partOfVerdict := false })
+        for n in rungs do
+          let dp ← runOneBatch entry.spec n
+          points := points.push dp
+          if dp.status != .ok then break
+    | _, _ =>
+      -- No bracket (doubling ran clean to ceiling, or first rung failed).
+      -- Fall back to doubling-only — probe rows already have
+      -- `partOfVerdict := true`.
+      pure ()
   let spawnFloor ← measureSpawnFloor
   let summary := Stats.summarize entry.spec entry.complexity points
   return { summary with spawnFloorNanos? := spawnFloor }
