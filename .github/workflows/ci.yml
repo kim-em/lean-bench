@@ -45,6 +45,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/config_benchmark_test
 
+      - name: fixed-benchmark test (kill path for setup_fixed_benchmark)
+        shell: bash
+        run: ./.lake/build/bin/fixed_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's
