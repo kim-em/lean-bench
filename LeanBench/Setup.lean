@@ -10,6 +10,10 @@ Usage:
 ```lean
 setup_benchmark goodFib n => 2 ^ n
 setup_benchmark mergeSort n => n * Nat.log2 n
+setup_benchmark slowThing n => 2 ^ n where {
+  maxSecondsPerCall := 5.0
+  paramCeiling := 1024
+}
 ```
 
 The complexity expression on the right of `=>` has type `Nat → Nat`.
@@ -22,21 +26,34 @@ The elaborator does only **static** checks at registration time:
 - a `Hashable α` instance is searched (presence flags whether
   `runChecked` will produce a hash; absence is fine)
 - the complexity term elaborates against `Nat → Nat`
+- the optional `where { … }` clause elaborates against `BenchmarkConfig`
 
-It auto-generates two top-level defs and a single `register` call.
+It auto-generates the complexity function, the specialised loop runner,
+the per-benchmark config def, and a single `register` call.
 There is intentionally **no** elaboration-time subprocess spawning;
 Codex review identified that as the worst design choice in the
 original draft (circular and phase-dependent). Compiled-code sanity
 checks live in `lean-bench verify` (a CLI subcommand) — see
 [`LeanBench.Verify`](Verify.lean).
 
-The `where { ... }` clause for overriding `BenchmarkConfig` defaults
-is on the v0.2 roadmap; in v0.1 every benchmark uses default config.
+## `where { ... }` overrides
+
+The optional `where { field := expr, ... }` clause overrides individual
+`BenchmarkConfig` fields. Anything you don't mention keeps its default.
+Field names match `BenchmarkConfig`. Run-time CLI overrides
+(`--max-seconds-per-call`, `--param-ceiling`, …) layer on top of these
+declared values, so a benchmark can ship a sensible default and still
+be tightened from the command line.
 -/
 
 open Lean Elab Command Term Meta
 
 namespace LeanBench
+
+/-- The trailing `where TERM` clause on `setup_benchmark`. `TERM` is
+elaborated against `LeanBench.BenchmarkConfig`, so the natural shape
+is a structure literal: `where { maxSecondsPerCall := 5.0 }`. -/
+syntax setupBenchmarkWhere := " where " term
 
 /--
 `setup_benchmark` registers a benchmark.
@@ -59,9 +76,14 @@ type of `mkInput : Nat → σ`. The macro generates a runner that calls
 iteration, so only the work inside the benchmarked function gets
 timed. Use this when the input the function operates on is expensive
 to build (an array, a tree, a hashmap), but cheap to reuse.
+
+An optional trailing `where { … }` clause overrides individual
+`BenchmarkConfig` fields. The two clauses can appear together; `with
+prep := …` comes first.
 -/
 syntax (name := setupBenchmark) "setup_benchmark "
-  ident ident " => " term (" with " &"prep" " := " ident)? : command
+  ident ident " => " term (" with " &"prep" " := " ident)?
+                          (setupBenchmarkWhere)? : command
 
 /-- Look up the type of a constant; return `(argTy, resTy)`. -/
 def expectFunction (env : Environment) (declName : Name) :
@@ -105,14 +127,23 @@ def resolveDecl (env : Environment) (ns : Name) (id : Ident) : Name :=
 def elabSetupBenchmark : CommandElab := fun stx => do
   match stx with
   | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm) =>
-    elabCore fnId argId complexityTerm none
+    elabCore fnId argId complexityTerm none none
   | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm
         with prep := $prepId:ident) =>
-    elabCore fnId argId complexityTerm (some prepId)
+    elabCore fnId argId complexityTerm (some prepId) none
+  | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm
+        $w:setupBenchmarkWhere) =>
+    elabCore fnId argId complexityTerm none (some w)
+  | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm
+        with prep := $prepId:ident
+        $w:setupBenchmarkWhere) =>
+    elabCore fnId argId complexityTerm (some prepId) (some w)
   | _ => throwUnsupportedSyntax
 where
   elabCore (fnId argId : Ident) (complexityTerm : Term)
-      (prepId? : Option Ident) : CommandElabM Unit := do
+      (prepId? : Option Ident)
+      (whereClause? : Option (TSyntax `LeanBench.setupBenchmarkWhere)) :
+      CommandElabM Unit := do
     let env ← getEnv
     let ns ← getCurrNamespace
     let fnName := resolveDecl env ns fnId
@@ -133,11 +164,21 @@ where
           throwError "setup_benchmark: function `{fnName}` takes argument of type `{fnArgTy}`, but prep `{prepName}` returns `{σ}`"
         pure fnResTy
     let isHashable ← hasHashable resTy
+    -- Pull out the optional `where TERM` clause. The TERM is whatever
+    -- the user wrote after `where`; we feed it to the generated config
+    -- def below where it gets elaborated against `BenchmarkConfig`.
+    let configTerm? : Option Term ← match whereClause? with
+      | none => pure none
+      | some w => match w with
+        | `(setupBenchmarkWhere| where $t:term) => pure (some t)
+        | _ => throwErrorAt w "setup_benchmark: malformed `where` clause"
     -- Names of the auto-generated helpers.
     let cName := fnName.str "_leanBench_complexity"
     let rName := fnName.str "_leanBench_runChecked"
+    let cfgDeclName := fnName.str "_leanBench_config"
     let cIdent := mkIdent cName
     let rIdent := mkIdent rName
+    let cfgIdent := mkIdent cfgDeclName
     -- (1) auto-def the complexity function.
     elabCommand <| ← `(command|
       def $cIdent : Nat → Nat := fun $argId => $complexityTerm)
@@ -215,7 +256,18 @@ where
                 let t₁ ← IO.monoNanosNow
                 return (t₁ - t₀, none))
     elabCommand (← mkRunner)
-    -- (3) emit an `initialize` block that puts the runtime closure
+    -- (3) auto-def the per-benchmark config. Default `{}` when no
+    -- `where` clause was supplied; otherwise elaborate the user's
+    -- term against `BenchmarkConfig` (so omitted fields keep their
+    -- defaults via Lean's structure-literal behaviour).
+    match configTerm? with
+    | none =>
+      elabCommand <| ← `(command|
+        def $cfgIdent : LeanBench.BenchmarkConfig := {})
+    | some t =>
+      elabCommand <| ← `(command|
+        def $cfgIdent : LeanBench.BenchmarkConfig := $t)
+    -- (4) emit an `initialize` block that puts the runtime closure
     --     into the IO.Ref registry. We `quote` the `Name`s so the
     --     runtime registry key is a properly hierarchical `Name` —
     --     `Name.mkSimple "a.b.c"` would instead produce an atomic name
@@ -225,9 +277,10 @@ where
     let formulaStr :=
       (complexityTerm.raw.reprint.getD (toString complexityTerm.raw)).trimAscii.toString
     let formulaLit := Syntax.mkStrLit formulaStr
-    let fnNameSyn : Term := quote fnName
-    let cNameSyn  : Term := quote cName
-    let rNameSyn  : Term := quote rName
+    let fnNameSyn  : Term := quote fnName
+    let cNameSyn   : Term := quote cName
+    let rNameSyn   : Term := quote rName
+    let cfgNameSyn : Term := quote cfgDeclName
     let isHashableSyn := mkIdent (if isHashable then ``true else ``false)
     elabCommand <| ← `(command|
       initialize do
@@ -236,16 +289,27 @@ where
             complexityName := $cNameSyn
             complexityFormula := $formulaLit
             runCheckedName := $rNameSyn
+            configDeclName := $cfgNameSyn
             hashable := $isHashableSyn
-            config := {} }
+            config := $cfgIdent }
           $rIdent
           $cIdent)
-    -- (4) update the persistent env extension at elaboration time.
+    -- (5) update the persistent env extension at elaboration time.
+    --     The runtime registry (populated by the `initialize` block
+    --     above) holds the elaborated `BenchmarkConfig` value; here we
+    --     store the *default* `config` field plus a `configDeclName`
+    --     pointing at the auto-generated def. Compile-time tooling
+    --     that wants the actual override-bearing config must look up
+    --     `env.find? spec.configDeclName` rather than reading
+    --     `spec.config`. The split keeps the persistent extension free
+    --     of unsafe elaboration-time evaluation while still giving
+    --     downstream tooling a stable handle on the declared config.
     let spec : BenchmarkSpec :=
       { name := fnName
         complexityName := cName
         complexityFormula := formulaStr
         runCheckedName := rName
+        configDeclName := cfgDeclName
         hashable := isHashable
         config := {} }
     modifyEnv (addSpec · spec)

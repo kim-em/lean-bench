@@ -1,4 +1,5 @@
 import Cli
+import Lean.Data.Json
 import LeanBench.Core
 import LeanBench.Env
 import LeanBench.Run
@@ -18,10 +19,17 @@ runner). Subcommand layout:
 |-----------------------------------------------------------------|------|
 | `./bench`                                                       | parent: print all registered benchmark names |
 | `./bench list`                                                  | parent: same |
-| `./bench run NAME`                                              | parent: run one benchmark, print report |
-| `./bench compare A B C`                                         | parent: comparison report |
+| `./bench run NAME [override flags]`                             | parent: run one benchmark, print report |
+| `./bench compare A B C [override flags]`                        | parent: comparison report |
 | `./bench verify [NAMES…]`                                        | parent: bounded `f 0` / `f 1` sanity check via children |
 | `./bench _child --bench NAME --param N --target-nanos T`        | child: one inner-tuned batch, print one JSONL row, exit |
+
+`run` and `compare` accept run-time `BenchmarkConfig` overrides via
+flags (`--max-seconds-per-call`, `--target-inner-nanos`,
+`--param-floor`, `--param-ceiling`, `--warmup-fraction`,
+`--slope-tolerance`). Each flag corresponds 1:1 with a
+`ConfigOverride` field; missing flags leave the declared config
+untouched.
 
 CLI parsing uses `Cli` (mhuisi/lean4-cli).
 -/
@@ -29,7 +37,43 @@ CLI parsing uses `Cli` (mhuisi/lean4-cli).
 open Cli
 
 namespace LeanBench
+
+/-- A `Float` `ParseableType` for `Cli`. The library ships with `Nat` /
+`Int` / `String` / `Bool` instances but not `Float`; we need it for the
+fractional `--max-seconds-per-call`, `--warmup-fraction`, and
+`--slope-tolerance` overrides. We parse via `Lean.Json` (which already
+handles signs, exponents, and fractions) so users can pass `0.5`,
+`1e-3`, `3`, etc. -/
+instance : Cli.ParseableType Float where
+  name := "Float"
+  parse?
+    | "" => none
+    | s  =>
+      match Lean.Json.parse s with
+      | Except.ok (Lean.Json.num n) => some n.toFloat
+      | _ => none
+
 namespace Cli
+
+/-- Read a flag's typed value from a `Cli.Parsed` if it was passed.
+Wraps the `flag? / .as!` boilerplate so each `ConfigOverride` field
+is one line. -/
+private def parsedFlag? (p : Cli.Parsed) (long : String) (τ : Type)
+    [Inhabited τ] [Cli.ParseableType τ] : Option τ :=
+  p.flag? long |>.map (·.as! τ)
+
+/-- Build a `ConfigOverride` from whichever override flags were passed
+on `run` / `compare`. The set of flags is intentionally narrower than
+`ConfigOverride` itself — `killGraceMs` is a SIGTERM-vs-SIGKILL
+implementation detail, not a benchmark-shape knob, so it stays
+declaration-time-only. -/
+def configOverrideFromParsed (p : Cli.Parsed) : ConfigOverride :=
+  { targetInnerNanos?      := parsedFlag? p "target-inner-nanos" Nat
+    maxSecondsPerCall?     := parsedFlag? p "max-seconds-per-call" Float
+    paramCeiling?          := parsedFlag? p "param-ceiling" Nat
+    paramFloor?            := parsedFlag? p "param-floor" Nat
+    verdictWarmupFraction? := parsedFlag? p "warmup-fraction" Float
+    slopeTolerance?        := parsedFlag? p "slope-tolerance" Float }
 
 /-! ## Subcommand handlers (parent side) -/
 
@@ -46,6 +90,7 @@ def runListCmd (_ : Cli.Parsed) : IO UInt32 := do
 def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   let nameStr := (p.positionalArg! "name").as! String
   let result ← LeanBench.runBenchmark nameStr.toName
+                  (configOverrideFromParsed p)
   IO.println (Format.fmtResult result)
   return 0
 
@@ -55,6 +100,7 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
     IO.eprintln "compare: need at least two benchmark names"
     return 1
   let report ← LeanBench.compare (names.map String.toName)
+                  (configOverrideFromParsed p)
   IO.println (Format.fmtComparison report)
   return 0
 
@@ -85,7 +131,18 @@ def listSub : Cmd := `[Cli|
 
 def runSub : Cmd := `[Cli|
   run VIA runRunCmd; ["0.1.0"]
-  "Run a single registered benchmark; print the result table."
+  "Run a single registered benchmark; print the result table.
+
+Override the benchmark's declared `BenchmarkConfig` per-run with the
+flags below. Each missing flag leaves the declared value untouched."
+
+  FLAGS:
+    "max-seconds-per-call" : Float;  "Hard wallclock cap per batch (seconds; e.g. 0.5; JSON-style numbers)."
+    "target-inner-nanos" : Nat;      "Auto-tune target wall-time per batch (nanoseconds)."
+    "param-floor" : Nat;             "Lowest param the doubling ladder starts from."
+    "param-ceiling" : Nat;           "Highest param the doubling ladder reaches before stopping."
+    "warmup-fraction" : Float;       "Fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
+    "slope-tolerance" : Float;       "Verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
 
   ARGS:
     name : String;     "Benchmark name (lowercase, as registered)."
@@ -103,7 +160,18 @@ def childSub : Cmd := `[Cli|
 
 def compareSub : Cmd := `[Cli|
   compare VIA runCompareCmd; ["0.1.0"]
-  "Compare multiple registered benchmarks side-by-side."
+  "Compare multiple registered benchmarks side-by-side.
+
+Same per-run override flags as `run`; they apply to every benchmark in
+the comparison."
+
+  FLAGS:
+    "max-seconds-per-call" : Float;  "Hard wallclock cap per batch (seconds; e.g. 0.5; JSON-style numbers)."
+    "target-inner-nanos" : Nat;      "Auto-tune target wall-time per batch (nanoseconds)."
+    "param-floor" : Nat;             "Lowest param the doubling ladder starts from."
+    "param-ceiling" : Nat;           "Highest param the doubling ladder reaches before stopping."
+    "warmup-fraction" : Float;       "Fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
+    "slope-tolerance" : Float;       "Verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
 
   ARGS:
     ...names : String;     "Two or more benchmark names (variadic)."

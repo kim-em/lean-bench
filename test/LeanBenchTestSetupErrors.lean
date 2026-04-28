@@ -58,4 +58,19 @@ error: setup_benchmark: function `LeanBench.Test.SetupErrors.takesNat` takes arg
 setup_benchmark takesNat n => n
   with prep := prepReturnsString
 
+-- Test 6: a `where { ... }` clause whose term doesn't elaborate against
+-- `BenchmarkConfig` is rejected with the standard type-mismatch error.
+def whereBad (n : Nat) : Nat := n
+/--
+error: failed to synthesize instance of type class
+  OfNat BenchmarkConfig 42
+numerals are polymorphic in Lean, but the numeral `42` cannot be used in a context where the expected type is
+  BenchmarkConfig
+due to the absence of the instance above
+
+Hint: Type class instance resolution failures can be inspected with the `set_option trace.Meta.synthInstance true` command.
+-/
+#guard_msgs in
+setup_benchmark whereBad n => n where 42
+
 end LeanBench.Test.SetupErrors

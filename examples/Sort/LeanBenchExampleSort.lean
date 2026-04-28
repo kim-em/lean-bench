@@ -38,7 +38,13 @@ def runInsertion (n : Nat) : Nat := (insertionSort (gen n)).headD 0
 /-- Benchmark target: List.mergeSort on a generated list, return its head. -/
 def runMergeSort (n : Nat) : Nat := ((gen n).mergeSort (· ≤ ·)).headD 0
 
-setup_benchmark runInsertion n => n * n
+-- `runInsertion` is O(n²); cap each batch tighter so the ladder
+-- doesn't spend forever on the largest n. Demonstrates the
+-- `where { ... }` declaration-time override.
+setup_benchmark runInsertion n => n * n where {
+  maxSecondsPerCall := 0.5
+  paramCeiling := 16384
+}
 setup_benchmark runMergeSort n => n * Nat.log2 (n + 1)
 
 end LeanBench.Examples.Sort
