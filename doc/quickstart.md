@@ -46,7 +46,7 @@ def main (args : List String) : IO UInt32 :=
 $ lake build bench
 $ lake exe bench list
 registered benchmarks:
-  «myFib»  →  complexity = «myFib._leanBench_complexity»
+  myFib    expected complexity: n + 1
 $ lake exe bench run myFib
 ... result table ...
 $ lake exe bench compare myFib someOtherFib
@@ -74,9 +74,11 @@ against `log2 0 = 0` producing a zero denominator in the ratio.
 
 Per-data-point ratio `C = perCallNanos / complexity(param)`. If your
 declared complexity matches the implementation, `C` is approximately
-constant and the verdict is `consistentWithDeclaredComplexity`.
-Otherwise the verdict is `inconclusive` and the raw ratios tell you
-which way `C` is drifting.
+constant. The verdict fits the log-log slope β of `C` vs `param` over
+the trimmed tail: "consistent with declared complexity" when
+`|β| ≤ 0.15`, otherwise "inconclusive". β is printed on the verdict
+line; its sign tells you the direction of any mismatch (positive →
+actually slower than declared, negative → actually faster).
 
 The harness prints its own per-spawn floor as part of the report. Any
 data point with `total_nanos` smaller than ~10× the spawn floor is
@@ -90,8 +92,8 @@ measurement.
   `brew install coreutils`, WSL works, native Windows doesn't. A
   pure-Lean cross-platform replacement is on the v0.2 list (PLAN.md F0).
 - The verdict is heuristic; the raw `ratios` array is the source of
-  truth. See [PLAN.md](../PLAN.md) for v0.2 plans (auto-fit, log-log
-  slope, baseline-diff, …).
+  truth. See [PLAN.md](../PLAN.md) for v0.2 plans (auto-fit,
+  baseline-diff, …).
 - Lean's `Nat` is arbitrary-precision. If your function returns big
   integers, the actual complexity includes the cost of arithmetic on
   results — likely worse than the "obvious" textbook complexity.

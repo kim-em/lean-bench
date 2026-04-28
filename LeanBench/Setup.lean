@@ -124,17 +124,26 @@ def elabSetupBenchmark : CommandElab := fun stx => do
             LeanBench.blackBox (Hashable.hash (sizeOf r))
           return none)
     -- (3) emit an `initialize` block that puts the runtime closure
-    --     into the IO.Ref registry.
-    let fnNameLit := Syntax.mkStrLit fnName.toString
-    let cNameLit := Syntax.mkStrLit cName.toString
-    let rNameLit := Syntax.mkStrLit rName.toString
+    --     into the IO.Ref registry. We `quote` the `Name`s so the
+    --     runtime registry key is a properly hierarchical `Name` —
+    --     `Name.mkSimple "a.b.c"` would instead produce an atomic name
+    --     whose `toString` wraps it in guillemets.
+    -- `reprint` preserves trailing whitespace from the source, which
+    -- would turn the `list` output into a spaced-out blank-line mess.
+    let formulaStr :=
+      (complexityTerm.raw.reprint.getD (toString complexityTerm.raw)).trimAscii.toString
+    let formulaLit := Syntax.mkStrLit formulaStr
+    let fnNameSyn : Term := quote fnName
+    let cNameSyn  : Term := quote cName
+    let rNameSyn  : Term := quote rName
     let isHashableSyn := mkIdent (if isHashable then ``true else ``false)
     elabCommand <| ← `(command|
       initialize do
         LeanBench.register
-          { name := Lean.Name.mkSimple $fnNameLit
-            complexityName := Lean.Name.mkSimple $cNameLit
-            runCheckedName := Lean.Name.mkSimple $rNameLit
+          { name := $fnNameSyn
+            complexityName := $cNameSyn
+            complexityFormula := $formulaLit
+            runCheckedName := $rNameSyn
             hashable := $isHashableSyn
             config := {} }
           $rIdent
@@ -143,6 +152,7 @@ def elabSetupBenchmark : CommandElab := fun stx => do
     let spec : BenchmarkSpec :=
       { name := fnName
         complexityName := cName
+        complexityFormula := formulaStr
         runCheckedName := rName
         hashable := isHashable
         config := {} }

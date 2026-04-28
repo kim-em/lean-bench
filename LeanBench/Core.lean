@@ -42,14 +42,18 @@ structure DataPoint where
   status       : Status
   deriving Repr, Inhabited
 
-/-- Heuristic verdict — see SPEC v0.1: weak labels by design. -/
+/-- Heuristic verdict — see SPEC v0.1: weak labels by design. Decided
+by fitting the log-log slope β of `C = perCallNanos / complexity(n)` vs
+`param` on the trimmed tail: `|β| ≤ slopeTolerance` → consistent, else
+inconclusive. The slope itself (carrying the direction) lives on
+`BenchmarkResult.slope?`; the verdict is intentionally two-valued. -/
 inductive Verdict
   | consistentWithDeclaredComplexity
   | inconclusive
   deriving Repr, Inhabited, BEq
 
-def Verdict.toString : Verdict → String
-  | .consistentWithDeclaredComplexity => "consistentWithDeclaredComplexity"
+def Verdict.describe : Verdict → String
+  | .consistentWithDeclaredComplexity => "consistent with declared complexity"
   | .inconclusive => "inconclusive"
 
 /-- Per-benchmark configuration. Defaults are the v0.1 contract. -/
@@ -64,15 +68,35 @@ structure BenchmarkConfig where
   paramFloor        : Nat   := 0
   /-- Grace ms between SIGTERM and SIGKILL on the child. -/
   killGraceMs       : Nat   := 100
+  /-- Fraction of leading ratios to drop before computing cMin/cMax for
+      the verdict. `0.0` uses every ratio; `0.2` drops the first 20% of
+      ratio samples (the cold regime, where per-call overhead dominates
+      the declared complexity). The raw `ratios` array in the result is
+      not trimmed — only the verdict reduction sees the trimmed view.
+      Clamped so that at least 3 samples remain. -/
+  verdictWarmupFraction : Float := 0.2
+  /-- Tolerance on the log-log slope β of `C` vs `param` over the
+      trimmed tail. The verdict is "consistent with declared
+      complexity" iff `|β| ≤ slopeTolerance`, otherwise "inconclusive".
+      Default 0.15 tolerates realistic per-point noise (~5% across ~10
+      tail rungs) while still flagging a spurious polynomial factor
+      like `n log n` vs declared `n`. Widen on chronically noisy
+      hardware; tighten only if you trust the measurements. -/
+  slopeTolerance : Float := 0.15
   deriving Inhabited, Repr
 
-/-- One entry in the benchmark registry. Stored as `Name`s only;
-neither `Syntax` nor `Expr`, sidestepping serialization issues. -/
+/-- One entry in the benchmark registry. Stored as `Name`s plus a
+printable copy of the complexity formula; neither `Syntax` nor `Expr`,
+sidestepping serialization issues. -/
 structure BenchmarkSpec where
   /-- The function under test. -/
   name             : Lean.Name
   /-- Auto-generated `Nat → Nat` complexity model. -/
   complexityName   : Lean.Name
+  /-- Pretty-printed source of the complexity expression (e.g. `"2 ^ n"`),
+      captured at `setup_benchmark` time so `list` can show the formula
+      the user wrote rather than the internal helper name. -/
+  complexityFormula : String
   /-- Auto-generated `Nat → IO (Option UInt64)` runner. -/
   runCheckedName   : Lean.Name
   /-- True iff the function's return type has a `Hashable` instance;
@@ -88,13 +112,26 @@ abbrev Ratio := Nat × Float
 /-- Result of a single benchmark invocation. -/
 structure BenchmarkResult where
   function   : Lean.Name
-  complexity : Name
+  /-- The expected-complexity formula the user declared, as printable
+      source (e.g. `"2 ^ n"`). Echoed back in the result header so
+      reports stay readable without needing the env around. -/
+  complexityFormula : String
   config     : BenchmarkConfig
   points     : Array DataPoint
   ratios     : Array Ratio
   verdict    : Verdict
   cMin?      : Option Float
   cMax?      : Option Float
+  /-- How many leading ratios were dropped by `verdictWarmupFraction`
+      before computing cMin/cMax. `0` when no trimming was applied. -/
+  verdictDroppedLeading : Nat := 0
+  /-- OLS slope β of `log C` vs `log param` over the trimmed tail.
+      Expected ≈ 0 when the declared complexity matches. Positive β
+      means the function grows faster than declared by roughly a factor
+      of `n^β`; negative β means slower. `none` when the trimmed tail
+      has fewer than 2 samples or degenerate `x` (shouldn't happen on
+      the doubling ladder). -/
+  slope? : Option Float := none
   /-- The harness's own per-spawn floor at the time of this run, for
       comparison against the smallest `totalNanos` recorded. -/
   spawnFloorNanos? : Option Nat := none
