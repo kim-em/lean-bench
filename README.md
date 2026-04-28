@@ -111,7 +111,9 @@ for the full guide.
 v0.1. Cross-platform: works on every platform Lean's process API
 supports (Linux, macOS, Windows). See [PLAN.md](PLAN.md) for the
 v0.2+ roadmap, [doc/quickstart.md](doc/quickstart.md) for the
-user guide, and [doc/schema.md](doc/schema.md) for the JSONL
+user guide, [doc/pitfalls.md](doc/pitfalls.md) for Lean-specific
+benchmarking pitfalls (bignum `Nat`, forcing evaluation, sharing,
+warm vs. cold), and [doc/schema.md](doc/schema.md) for the JSONL
 result-row schema and its evolution rules.
 
 ## Design
@@ -134,6 +136,13 @@ rationale, including limits and known caveats.
 Each measurement is a child process, so very fast operations have a
 per-spawn noise floor in the milliseconds. The harness measures this
 floor itself and prints it with every report.
+
+Lean's `Nat` is bignum, the compiler hoists pure work out of loops
+unless its result is observed, and reference-counted sharing can
+flip operations between O(1) and O(n) depending on aliasing — these
+and other Lean-specific traps are covered in
+[doc/pitfalls.md](doc/pitfalls.md). Read it before declaring a
+benchmark you're going to commit to a CI baseline.
 
 The verdict is a thresholded log-log slope (`|β| ≤ 0.15` over the
 trimmed tail), not a statistical test. β's sign tells you direction;

@@ -263,4 +263,7 @@ which is the v0.2 hex use case for "this took ~2× FLINT."
   baseline-diff, …).
 - Lean's `Nat` is arbitrary-precision. If your function returns big
   integers, the actual complexity includes the cost of arithmetic on
-  results — likely worse than the "obvious" textbook complexity.
+  results — likely worse than the "obvious" textbook complexity. See
+  [pitfalls.md](pitfalls.md) for the full set of Lean-specific
+  benchmarking traps (bignum `Nat`, forcing evaluation, hashing cost,
+  sharing-induced regressions, compiled vs. `#eval`, warm vs. cold).
