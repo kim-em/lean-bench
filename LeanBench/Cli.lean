@@ -112,7 +112,8 @@ def configOverrideFromParsed (p : Cli.Parsed) : ConfigOverride :=
     slopeTolerance?        := parsedFlag? p "slope-tolerance" Float
     paramSchedule?         := parsedFlag? p "param-schedule" LeanBench.ParamSchedule
     cacheMode?             := parsedFlag? p "cache-mode" LeanBench.CacheMode
-    outerTrials?           := parsedFlag? p "outer-trials" Nat }
+    outerTrials?           := parsedFlag? p "outer-trials" Nat
+    signalFloorMultiplier? := parsedFlag? p "signal-floor-multiplier" Float }
 
 /-- Build a `FixedConfigOverride` from override flags. Only fields
 that share a flag namespace with parametric (`max-seconds-per-call`)
@@ -246,8 +247,18 @@ def runListCmd (p : Cli.Parsed) : IO UInt32 := do
     IO.println (Format.fmtFixedSpec e.spec)
   return 0
 
+/-- Names of parametric benchmarks in `parametric` that produced no
+    verdict-eligible rows. Used to emit a single-line stderr summary
+    so CI logs surface the calibration failure without having to
+    parse the per-result advisories. Issue #47. -/
+private def noUsableDataNames (parametric : Array BenchmarkResult) :
+    Array Lean.Name :=
+  parametric.filterMap fun r => if r.noUsableData then some r.function else none
+
 /-- Shared post-run logic: baseline comparison + export. Returns
-the exit code (non-zero on regressions). Issue #3. -/
+the exit code: `exitNoUsableData` (2) if any parametric run produced
+zero verdict-eligible rows, else `1` on baseline regressions, else `0`.
+Issue #3, issue #47. -/
 private def handleBaselineAndExport
     (parametric : Array BenchmarkResult)
     (fixed : Array FixedResult)
@@ -280,6 +291,16 @@ private def handleBaselineAndExport
     IO.FS.writeFile ep (json.pretty ++ "\n")
     IO.println s!"exported to {ep}"
   | none => pure ()
+  -- Issue #47: a parametric run with zero verdict-eligible rows is a
+  -- hard calibration failure of the registration. Surface it via a
+  -- dedicated exit code (`exitNoUsableData = 2`) that supersedes the
+  -- baseline-regression code (`1`): if the harness has no data, the
+  -- regression check itself was meaningless.
+  let noData := noUsableDataNames parametric
+  unless noData.isEmpty do
+    let names := String.intercalate ", " (noData.toList.map toString)
+    IO.eprintln s!"run: {noData.size} benchmark(s) produced zero verdict-eligible rows: {names}"
+    exitCode := exitNoUsableData
   return exitCode
 
 /-- Dispatch `run` by explicit names and/or filters. When explicit
@@ -460,6 +481,13 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
       Export.exportToFile ep report.results #[] env?
       IO.println s!"exported to {ep}"
     | none => pure ()
+    -- Issue #47: propagate the no-usable-data exit code if any
+    -- constituent run produced zero verdict-eligible rows.
+    let noData := noUsableDataNames report.results
+    unless noData.isEmpty do
+      let names := String.intercalate ", " (noData.toList.map toString)
+      IO.eprintln s!"compare: {noData.size} benchmark(s) produced zero verdict-eligible rows: {names}"
+      return exitNoUsableData
     return 0
   if allFixed then
     let report ← LeanBench.compareFixed resolved
@@ -596,6 +624,7 @@ Each missing flag leaves the declared value untouched."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
+    "signal-floor-multiplier" : Float; "Parametric only: per-spawn signal-floor multiplier (default 10.0; ≥ 1.0). Rows whose totalNanos is below `multiplier × spawnFloor` are flagged `[<floor]` and excluded from the verdict. `1.0` disables the filter; useful in CI smoke tests on slow runners. Issue #47."
     "auto-fit";                      "Parametric only: after the verdict, fit a fixed catalog of complexity models (1, n, n*log n, n^2, n^3, 2^n) to the observed per-call timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
@@ -646,6 +675,7 @@ explicit names are used."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
+    "signal-floor-multiplier" : Float; "Parametric only: per-spawn signal-floor multiplier (default 10.0; ≥ 1.0). Rows whose totalNanos is below `multiplier × spawnFloor` are flagged `[<floor]` and excluded from the verdict. `1.0` disables the filter; useful in CI smoke tests on slow runners. Issue #47."
     "auto-fit";                      "Parametric only: after each per-function verdict, fit a fixed catalog of complexity models to the observed timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."

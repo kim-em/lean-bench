@@ -314,6 +314,22 @@ weren't covered this time.
 per-benchmark `--max-seconds-per-call` already bounds individual
 calls.
 
+### Exit codes
+
+`run` and `compare` use distinct non-zero codes so CI can react
+without parsing stdout:
+
+| code | meaning |
+|------|---------|
+| `0`  | success — the run completed and (with `--baseline`) no regressions were flagged |
+| `1`  | a regression vs. the baseline was flagged, or argument validation / dispatch errored |
+| `2`  | the parametric run produced **zero verdict-eligible rows** — every measurement was below the per-spawn signal floor, every measurement hit the wallclock cap, or every measurement errored. The schedule, the `maxSecondsPerCall` cap, or the inner-tuning budget did not produce timing data the harness can use. This is a calibration failure of the registration, not a soft "we tried our best." `compare` propagates the same code if at least one constituent is in this state. Runs cut short by `--total-seconds` are excluded — that's a user-requested early stop, surfaced by the budget summary instead. |
+
+Code `2` is the right signal to fail-loud on rather than swallow:
+the verdict text would otherwise read `inconclusive (cMin=—,
+cMax=—, β=—)` and look like a benign "couldn't decide", masking
+the underlying calibration bug.
+
 ## Configuring a benchmark
 
 `BenchmarkConfig` carries the knobs the harness reads at run time:
