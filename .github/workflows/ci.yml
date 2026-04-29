@@ -89,6 +89,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/profile_benchmark_test
 
+      - name: no-usable-data exit-code test (issue #47)
+        shell: bash
+        run: ./.lake/build/bin/no_usable_data_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's

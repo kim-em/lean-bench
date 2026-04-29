@@ -628,6 +628,33 @@ structure BenchmarkResult where
   budgetTruncated : Bool := false
   deriving Inhabited, Repr
 
+/-- The benchmark produced no verdict-eligible rows: every measurement
+    was below the per-spawn signal floor, every measurement hit the
+    wallclock cap, every measurement errored, or only param-0/1 rows
+    landed. The declared schedule + wallclock cap + inner-tuning budget
+    failed to produce any data the harness can use to compute a
+    verdict — a hard calibration failure of the registration, not a
+    soft "we tried our best." Issue #47.
+
+    `ratios` is built by `Stats.ratiosFromPoints`, which already filters
+    out non-`ok`, doubling-probe, below-floor, and `param < 2` rows, so
+    "no verdict-eligible rows" is exactly `ratios.isEmpty`.
+
+    Budget-truncated runs (`--total-seconds`, issue #9) are excluded:
+    those are user-requested early stops, not calibration bugs. The
+    budget summary already surfaces "completed/skipped/truncated"
+    counts on stdout and in the JSON export, which is the right
+    signal for that case. -/
+def BenchmarkResult.noUsableData (r : BenchmarkResult) : Bool :=
+  r.ratios.isEmpty && !r.budgetTruncated
+
+/-- Process exit code that signals "the parametric run produced no
+    verdict-eligible rows" — see `BenchmarkResult.noUsableData`. Chosen
+    distinct from `1` so scripts and CI can distinguish a calibration
+    bug (the harness has nothing to compare) from a baseline
+    regression (the harness compared and found a mismatch). Issue #47. -/
+def exitNoUsableData : UInt32 := 2
+
 /-- One diverging param in a `compare`: the param at which results
 disagreed, the full hash table of each compared function at that
 param (in CLI argument order, so reports can render an "all

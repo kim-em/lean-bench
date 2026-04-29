@@ -246,8 +246,18 @@ def runListCmd (p : Cli.Parsed) : IO UInt32 := do
     IO.println (Format.fmtFixedSpec e.spec)
   return 0
 
+/-- Names of parametric benchmarks in `parametric` that produced no
+    verdict-eligible rows. Used to emit a single-line stderr summary
+    so CI logs surface the calibration failure without having to
+    parse the per-result advisories. Issue #47. -/
+private def noUsableDataNames (parametric : Array BenchmarkResult) :
+    Array Lean.Name :=
+  parametric.filterMap fun r => if r.noUsableData then some r.function else none
+
 /-- Shared post-run logic: baseline comparison + export. Returns
-the exit code (non-zero on regressions). Issue #3. -/
+the exit code: `exitNoUsableData` (2) if any parametric run produced
+zero verdict-eligible rows, else `1` on baseline regressions, else `0`.
+Issue #3, issue #47. -/
 private def handleBaselineAndExport
     (parametric : Array BenchmarkResult)
     (fixed : Array FixedResult)
@@ -280,6 +290,16 @@ private def handleBaselineAndExport
     IO.FS.writeFile ep (json.pretty ++ "\n")
     IO.println s!"exported to {ep}"
   | none => pure ()
+  -- Issue #47: a parametric run with zero verdict-eligible rows is a
+  -- hard calibration failure of the registration. Surface it via a
+  -- dedicated exit code (`exitNoUsableData = 2`) that supersedes the
+  -- baseline-regression code (`1`): if the harness has no data, the
+  -- regression check itself was meaningless.
+  let noData := noUsableDataNames parametric
+  unless noData.isEmpty do
+    let names := String.intercalate ", " (noData.toList.map toString)
+    IO.eprintln s!"run: {noData.size} benchmark(s) produced zero verdict-eligible rows: {names}"
+    exitCode := exitNoUsableData
   return exitCode
 
 /-- Dispatch `run` by explicit names and/or filters. When explicit
@@ -460,6 +480,13 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
       Export.exportToFile ep report.results #[] env?
       IO.println s!"exported to {ep}"
     | none => pure ()
+    -- Issue #47: propagate the no-usable-data exit code if any
+    -- constituent run produced zero verdict-eligible rows.
+    let noData := noUsableDataNames report.results
+    unless noData.isEmpty do
+      let names := String.intercalate ", " (noData.toList.map toString)
+      IO.eprintln s!"compare: {noData.size} benchmark(s) produced zero verdict-eligible rows: {names}"
+      return exitNoUsableData
     return 0
   if allFixed then
     let report ← LeanBench.compareFixed resolved
