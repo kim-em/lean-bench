@@ -257,6 +257,63 @@ private def fmtTrialSummaries (r : BenchmarkResult) : Array String :=
         "  "  ++ rightpad spreadCol[i]! wSpread
     return lines
 
+/-- Render the memory-metrics summary for a parametric result. Returns
+    `#[]` when no `ok` row carried any memory data, so platforms (and
+    rows) that don't capture memory leave the report untouched. When
+    at least one `ok` row carried `peakRssKb`, emits a single line
+    showing the range across all such rows; same for `allocBytes`.
+    Issue #6. -/
+private def fmtMemorySummary (points : Array DataPoint) : Array String :=
+  Id.run do
+    let okPoints := points.filter (fun dp => dp.status == .ok)
+    let rssVals : Array Nat := okPoints.filterMap (·.peakRssKb)
+    let allocVals : Array Nat := okPoints.filterMap (·.allocBytes)
+    if rssVals.isEmpty && allocVals.isEmpty then return #[]
+    let mut lines : Array String := #[]
+    if !rssVals.isEmpty then
+      let lo := rssVals.foldl min rssVals[0]!
+      let hi := rssVals.foldl max 0
+      let n := rssVals.size
+      let suffix : String :=
+        if lo == hi then s!"{fmtNatUnderscores lo} kB"
+        else s!"{fmtNatUnderscores lo} kB..{fmtNatUnderscores hi} kB"
+      lines := lines.push s!"  peak RSS: {suffix} (across {n} ok row(s))"
+    if !allocVals.isEmpty then
+      let lo := allocVals.foldl min allocVals[0]!
+      let hi := allocVals.foldl max 0
+      let n := allocVals.size
+      let suffix : String :=
+        if lo == hi then s!"{fmtNatUnderscores lo} B"
+        else s!"{fmtNatUnderscores lo} B..{fmtNatUnderscores hi} B"
+      lines := lines.push s!"  alloc: {suffix} (across {n} ok row(s))"
+    return lines
+
+/-- Same as `fmtMemorySummary`, for fixed-benchmark points. -/
+private def fmtFixedMemorySummary (points : Array FixedDataPoint) :
+    Array String := Id.run do
+  let okPoints := points.filter (fun dp => dp.status == .ok)
+  let rssVals : Array Nat := okPoints.filterMap (·.peakRssKb)
+  let allocVals : Array Nat := okPoints.filterMap (·.allocBytes)
+  if rssVals.isEmpty && allocVals.isEmpty then return #[]
+  let mut lines : Array String := #[]
+  if !rssVals.isEmpty then
+    let lo := rssVals.foldl min rssVals[0]!
+    let hi := rssVals.foldl max 0
+    let n := rssVals.size
+    let suffix : String :=
+      if lo == hi then s!"{fmtNatUnderscores lo} kB"
+      else s!"{fmtNatUnderscores lo} kB..{fmtNatUnderscores hi} kB"
+    lines := lines.push s!"  peak RSS: {suffix} (across {n} ok repeat(s))"
+  if !allocVals.isEmpty then
+    let lo := allocVals.foldl min allocVals[0]!
+    let hi := allocVals.foldl max 0
+    let n := allocVals.size
+    let suffix : String :=
+      if lo == hi then s!"{fmtNatUnderscores lo} B"
+      else s!"{fmtNatUnderscores lo} B..{fmtNatUnderscores hi} B"
+    lines := lines.push s!"  alloc: {suffix} (across {n} ok repeat(s))"
+  return lines
+
 /-- Render one `BenchmarkResult` as a multi-line block with every
 numeric value bounded to 3 decimals and every column width derived
 from the data so decimal points align.
@@ -343,6 +400,8 @@ def fmtResult (r : BenchmarkResult) (includeEnv : Bool := true) : String := Id.r
   | some n =>
     lines := lines.push s!"  per-spawn floor (harness self-measurement): {fmtNanosStr n}"
   | none => pure ()
+  for line in fmtMemorySummary r.points do
+    lines := lines.push line
   for line in fmtTrialSummaries r do
     lines := lines.push line
   for adv in r.advisories do
@@ -484,6 +543,8 @@ def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.
     else
       "  hash: DIVERGED across repeats — likely a non-deterministic benchmark"
   lines := lines.push hashLine
+  for line in fmtFixedMemorySummary r.points do
+    lines := lines.push line
   return "\n".intercalate lines.toList
 
 /-- `0xDEADBEEF` rendering for an `Option UInt64`; `—` when absent

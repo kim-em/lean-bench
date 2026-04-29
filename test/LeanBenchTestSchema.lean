@@ -215,7 +215,8 @@ def testCanonicalKeyConstants : IO UInt32 := do
   let okFixed :=
     Schema.requiredFixedKeys == #["repeat_index"]
   let okOptCommon :=
-    Schema.optionalCommonKeys == #["kind", "result_hash", "error", "env"]
+    Schema.optionalCommonKeys ==
+      #["kind", "result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
   let okOptParametric :=
     Schema.optionalParametricKeys == #["per_call_nanos", "cache_mode"]
   let okEnvKeys :=
@@ -544,6 +545,55 @@ def testFixedParseRejectsMissingRequired : IO UInt32 := do
     | .error _ => pure ()
   return 0
 
+/-! ## Memory metrics (issue #6) -/
+
+/-- Round-trip: a parametric row carrying explicit `alloc_bytes` and
+    `peak_rss_kb` numeric values must parse back into the optional
+    `Option Nat` fields on `DataPoint`. -/
+def testParseAcceptsMemoryMetrics : IO UInt32 := do
+  let row :=
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
+    "\"param\":1,\"inner_repeats\":1,\"total_nanos\":1," ++
+    "\"per_call_nanos\":1.0,\"status\":\"ok\"," ++
+    "\"alloc_bytes\":12345,\"peak_rss_kb\":67890}"
+  match parseChildRow row with
+  | .error e =>
+    IO.eprintln s!"row with memory metrics failed to parse: {e}"
+    return 1
+  | .ok dp =>
+    expect s!"alloc_bytes/peak_rss_kb landed: {repr dp}"
+      (dp.allocBytes == some 12345 ∧ dp.peakRssKb == some 67890)
+
+/-- Symmetric round-trip on the fixed parser. -/
+def testFixedParseAcceptsMemoryMetrics : IO UInt32 := do
+  let row :=
+    "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
+    "\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"," ++
+    "\"alloc_bytes\":42,\"peak_rss_kb\":100}"
+  match parseFixedChildRow row with
+  | .error e =>
+    IO.eprintln s!"fixed row with memory metrics failed to parse: {e}"
+    return 1
+  | .ok dp =>
+    expect s!"fixed alloc_bytes/peak_rss_kb landed: {repr dp}"
+      (dp.allocBytes == some 42 ∧ dp.peakRssKb == some 100)
+
+/-- An explicit `null` for either field must round-trip as `none`,
+    matching the platform-unsupported emission. -/
+def testParseTolerantToMemoryNulls : IO UInt32 := do
+  let row :=
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
+    "\"param\":1,\"inner_repeats\":1,\"total_nanos\":1," ++
+    "\"per_call_nanos\":1.0,\"status\":\"ok\"," ++
+    "\"alloc_bytes\":null,\"peak_rss_kb\":null}"
+  match parseChildRow row with
+  | .error e =>
+    IO.eprintln s!"row with null memory metrics failed to parse: {e}"
+    return 1
+  | .ok dp =>
+    expect s!"null memory metrics → none: {repr dp}"
+      (dp.allocBytes == none ∧ dp.peakRssKb == none)
+
 /-! ## Driver -/
 
 def runTests : IO UInt32 := do
@@ -568,7 +618,10 @@ def runTests : IO UInt32 := do
     , ("fixed.missingOptional",      testFixedParseAcceptsMissingOptional)
     , ("fixed.wrongKind",            testFixedParseRejectsWrongKind)
     , ("fixed.missingKind",          testFixedParseRejectsMissingKind)
-    , ("fixed.missingRequired",      testFixedParseRejectsMissingRequired) ]
+    , ("fixed.missingRequired",      testFixedParseRejectsMissingRequired)
+    , ("parse.memoryMetrics",        testParseAcceptsMemoryMetrics)
+    , ("fixed.memoryMetrics",        testFixedParseAcceptsMemoryMetrics)
+    , ("parse.memoryNulls",          testParseTolerantToMemoryNulls) ]
   do
     let code ← t
     if code != 0 then

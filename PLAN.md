@@ -27,15 +27,36 @@ example still works:
 `lake exe fib_benchmark_example run goodFib --auto-fit` reports `n`
 as the best fit.
 
-## F3. Memory metrics
+## F3. Memory metrics (shipped — issue #6)
 
-Allocations and peak RSS via POSIX `getrusage(RUSAGE_CHILDREN)` after
-the child exits. New optional `DataPoint` fields:
-`allocBytes`, `peakRssKb`. Helps catch O(n) memory regressions when
-runtime looks fine.
+`DataPoint` and `FixedDataPoint` carry optional `allocBytes` /
+`peakRssKb` fields, the JSONL wire format gained matching
+`alloc_bytes` / `peak_rss_kb` keys (additive, no schema bump),
+the export format includes them as first-class per-point fields,
+and the human-readable report surfaces a per-result memory line
+when at least one row carries a measurement.
 
-Acceptance: a benchmark whose function allocates a list proportional
-to `n` shows `allocBytes` growing approximately linearly.
+The first iteration captures `peak_rss_kb` on Linux only, by reading
+`/proc/self/status`'s `VmHWM:` line at the end of the child's batch.
+macOS / Windows / Emscripten emit `null` for the field; the
+[schema doc](doc/schema.md#memory-metrics) documents the platform
+support and the interpretation rules (the value is the child's peak
+including the Lean runtime's own footprint, most useful as a delta
+across runs of the same benchmark).
+
+`alloc_bytes` is reserved in the schema but always emitted as `null`
+today — Lean 4 has no portable in-process API for total bytes
+allocated, and the issue called out the field as "if there is a
+reliable way to obtain them." When a future Lean release exposes
+allocation counters in-process, populating the field is a one-line
+change in `LeanBench.MemStats.capture`; readers downstream already
+handle the value (parsers, exporters, formatters).
+
+Future work in this slot:
+
+- macOS / Windows peak-RSS probes (`getrusage` /
+  `GetProcessMemoryInfo`) via FFI when there's a clear ask.
+- Allocation counters once Lean exposes them in-process.
 
 ## F4. Cold vs warm cache (shipped — issue #12)
 
