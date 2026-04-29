@@ -187,6 +187,44 @@ private def hasFilters (tagFilter : Array String) (nameFilter : Option String) :
     Bool :=
   !tagFilter.isEmpty || nameFilter.isSome
 
+/-! ## CI-budget mode (issue #9)
+
+`--total-seconds N` on `run` puts the suite under a wallclock budget.
+Benchmarks are scheduled in their natural order; before each one we
+check whether the deadline has passed. Benchmarks that don't fit are
+recorded as `BudgetSkip` entries — they appear in the terminal output
+and the export document so partial-suite runs are explicit rather
+than hidden.
+
+The deadline is also plumbed into `runBenchmark` so a single benchmark
+can be cut short between rungs (the `BenchmarkResult.budgetTruncated`
+flag). The bound on total wall time is therefore approximately
+`total_seconds + maxSecondsPerCall` (one rung may be in flight when
+the deadline trips). See `doc/quickstart.md#ci-budget-mode`. -/
+
+/-- A benchmark that wasn't run because the CI budget was exhausted
+before it could start. -/
+structure BudgetSkip where
+  function : Lean.Name
+  /-- `"parametric"` or `"fixed"` — matches the export discriminator. -/
+  kind     : String
+  deriving Inhabited, Repr
+
+/-- Suite-level summary of a budgeted run. Carried alongside the
+ordinary results so the CLI report and the export document agree. -/
+structure BudgetSummary where
+  totalSeconds   : Float
+  /-- Wallclock seconds elapsed at the moment the orchestrator stopped
+      scheduling new benchmarks (either the suite finished or the
+      deadline tripped). -/
+  elapsedSeconds : Float
+  completed      : Nat
+  skipped        : Array BudgetSkip
+  /-- Number of completed benchmarks whose internal ladder was cut
+      short by the deadline (`BenchmarkResult.budgetTruncated`). -/
+  truncated      : Nat
+  deriving Inhabited, Repr
+
 /-! ## Subcommand handlers (parent side) -/
 
 def runListCmd (p : Cli.Parsed) : IO UInt32 := do
@@ -215,7 +253,8 @@ private def handleBaselineAndExport
     (fixed : Array FixedResult)
     (env? : Option Env)
     (baselinePath? exportPath? : Option String)
-    (threshold : Float) : IO UInt32 := do
+    (threshold : Float)
+    (budget? : Option BudgetSummary := none) : IO UInt32 := do
   -- Baseline comparison
   let mut exitCode : UInt32 := 0
   let mut baselineReports? : Option (Array Export.BaselineReport) := none
@@ -232,7 +271,12 @@ private def handleBaselineAndExport
   -- Export
   match exportPath? with
   | some ep =>
-    let json := Export.toJsonWithBaseline parametric fixed env? baselineReports?
+    let budgetJson? := budget?.map fun s =>
+      Export.budgetSummaryToJson s.totalSeconds s.elapsedSeconds
+        s.completed s.truncated
+        (s.skipped.map fun sk => (sk.function, sk.kind))
+    let json := Export.toJsonWithBaseline parametric fixed env?
+      baselineReports? budgetJson?
     IO.FS.writeFile ep (json.pretty ++ "\n")
     IO.println s!"exported to {ep}"
   | none => pure ()
@@ -300,25 +344,74 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   if pFiltered.isEmpty && fFiltered.isEmpty then
     IO.eprintln "run: no benchmarks match the given filters"
     return 1
+  -- Issue #9: optional CI-budget mode. When `--total-seconds` is set,
+  -- compute an absolute deadline and consult it before each benchmark
+  -- (and inside `runBenchmark` between rungs) so the suite stops
+  -- within a predictable bound.
+  let totalSecs? : Option Float := parsedFlag? p "total-seconds" Float
+  match totalSecs? with
+  | some s =>
+    if s.isNaN || s < 0.0 then
+      IO.eprintln s!"run: --total-seconds must be ≥ 0; got {s}"
+      return 1
+  | none => pure ()
+  let startMono ← IO.monoNanosNow
+  let deadline? : Option Nat := totalSecs?.map fun s =>
+    -- `s ≥ 0` (validated above), so the conversion is well-defined.
+    -- A `0` budget produces a deadline equal to `startMono`, which
+    -- the first deadline check will see as exhausted, marking every
+    -- benchmark as a budget skip.
+    startMono + (s * 1.0e9).toUInt64.toNat
   let mut first := true
   let mut pResults : Array BenchmarkResult := #[]
   let mut fResults : Array FixedResult := #[]
+  let mut skipped : Array BudgetSkip := #[]
+  let mut truncated : Nat := 0
+  let mut budgetExhausted := false
   for e in pFiltered do
-    unless first do IO.println ""
-    first := false
-    let result ← LeanBench.runBenchmark e.spec.name (configOverrideFromParsed p)
-    IO.println (fmtP result)
-    pResults := pResults.push result
+    if budgetExhausted then
+      skipped := skipped.push { function := e.spec.name, kind := "parametric" }
+    else if (← LeanBench.deadlineExceeded? deadline?) then
+      budgetExhausted := true
+      skipped := skipped.push { function := e.spec.name, kind := "parametric" }
+    else
+      unless first do IO.println ""
+      first := false
+      let result ← LeanBench.runBenchmark e.spec.name
+                      (configOverrideFromParsed p) deadline?
+      IO.println (fmtP result)
+      if result.budgetTruncated then truncated := truncated + 1
+      pResults := pResults.push result
   for e in fFiltered do
-    unless first do IO.println ""
-    first := false
-    let result ← LeanBench.runFixedBenchmark e.spec.name
-                    (fixedConfigOverrideFromParsed p)
-    IO.println (Format.fmtFixedResult result)
-    fResults := fResults.push result
+    if budgetExhausted then
+      skipped := skipped.push { function := e.spec.name, kind := "fixed" }
+    else if (← LeanBench.deadlineExceeded? deadline?) then
+      budgetExhausted := true
+      skipped := skipped.push { function := e.spec.name, kind := "fixed" }
+    else
+      unless first do IO.println ""
+      first := false
+      let result ← LeanBench.runFixedBenchmark e.spec.name
+                      (fixedConfigOverrideFromParsed p) deadline?
+      IO.println (Format.fmtFixedResult result)
+      if result.budgetTruncated then truncated := truncated + 1
+      fResults := fResults.push result
+  let endMono ← IO.monoNanosNow
   let env? := pResults[0]?.bind (·.env?) |>.orElse fun _ => fResults[0]?.bind (·.env?)
+  let budget? : Option BudgetSummary := totalSecs?.map fun ts =>
+    { totalSeconds   := ts
+      elapsedSeconds := (endMono - startMono).toFloat / 1.0e9
+      completed      := pResults.size + fResults.size
+      skipped
+      truncated }
+  match budget? with
+  | some b =>
+    IO.println ""
+    IO.println (Format.fmtBudgetSummary b.totalSeconds b.elapsedSeconds
+      b.completed b.truncated (b.skipped.map fun s => (s.function, s.kind)))
+  | none => pure ()
   handleBaselineAndExport pResults fResults env?
-    baselinePath? exportPath? threshold
+    baselinePath? exportPath? threshold budget?
 
 /-- Dispatch `compare A B …` by registration kind. All listed names
     must be the same kind (all parametric or all fixed); mixing is
@@ -508,6 +601,7 @@ Each missing flag leaves the declared value untouched."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
     baseline : String;               "Compare against a previous export FILE; report regressions and improvements. Exit code is non-zero when any regression exceeds the threshold."
     "regression-threshold" : Float;  "Percentage threshold for flagging regressions (default 10.0; e.g. 10 means >10% slower is a regression)."
+    "total-seconds" : Float;         "CI-budget mode (issue #9): bound the whole suite to this many wallclock seconds. Benchmarks that would start past the deadline are recorded as 'budget skip' rows; a benchmark whose ladder runs into the deadline is truncated between rungs. Only meaningful with --tag/--filter (suite mode)."
 
   ARGS:
     ...names : String;     "Benchmark name(s). If omitted, use --tag/--filter to select."

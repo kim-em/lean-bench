@@ -17,6 +17,7 @@ defaultTargets = [
   "tags_benchmark_test",
   "auto_fit_benchmark_test",
   "profile_benchmark_test",
+  "budget_benchmark_test",
 ]
 
 [[require]]
@@ -152,3 +153,8 @@ root = "LeanBenchTestAutoFit"
 name = "profile_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestProfile"
+
+[[lean_exe]]
+name = "budget_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestBudget"

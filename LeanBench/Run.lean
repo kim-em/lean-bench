@@ -51,6 +51,27 @@ namespace LeanBench
 def ownExe : IO String := do
   return (← IO.appPath).toString
 
+/-! ## CI-budget deadline (issue #9)
+
+A `BudgetDeadline` is an absolute monotonic-clock instant past which
+the budgeted-run orchestrator stops scheduling new work. The deadline
+is plumbed through `runBenchmark` / `runFixedBenchmark` so a single
+benchmark can also be cut short between rungs (rather than only at
+benchmark boundaries). Each child spawn is still independently capped
+by `maxSecondsPerCall`, so the worst-case bound on total wall time is
+approximately `total_seconds + maxSecondsPerCall` (one rung may have
+been in flight when the deadline was checked). See
+[`doc/quickstart.md#ci-budget-mode`](../doc/quickstart.md#ci-budget-mode). -/
+abbrev BudgetDeadline := Nat
+
+/-- Has the deadline passed? `none` (no budget) is always `false`. -/
+def deadlineExceeded? (deadline? : Option BudgetDeadline) : IO Bool := do
+  match deadline? with
+  | none => return false
+  | some d =>
+    let now ← IO.monoNanosNow
+    return now ≥ d
+
 /-- Parse a hex-prefixed UInt64 string like `"0xdeadbeef"`. -/
 private def parseHexU64 (s : String) : Option UInt64 := do
   guard (s.startsWith "0x")
@@ -355,7 +376,7 @@ private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
 private def rungAnyOk (rung : Array DataPoint) : Bool :=
   rung.any (fun dp => dp.status == .ok)
 
-/-- Run the static doubling ladder. Returns `(points, lastOk?, firstFail?)`:
+/-- Run the static doubling ladder. Returns `(points, lastOk?, firstFail?, budgetTruncated)`:
 
 - `lastOk?` is the largest param whose status was `.ok` (none if no row
   was ok),
@@ -380,21 +401,31 @@ trials at every probe rung that survived in a second pass below
 trial cluster on the rungs that count.
 
 Probe rows are returned with whatever `partOfVerdict` `runOneBatch`
-chose (defaults to true); the caller flips them as needed. -/
-private def runDoublingProbe (spec : BenchmarkSpec) (env : Env) :
-    IO (Array DataPoint × Option Nat × Option Nat) := do
+chose (defaults to true); the caller flips them as needed.
+
+The optional `deadline?` (issue #9) lets the probe stop early when a
+CI budget has been exhausted; the fourth return component flips to
+`true` in that case so the caller can record `budgetTruncated`.
+With `deadline? = none` the flag is always `false`. -/
+private def runDoublingProbe (spec : BenchmarkSpec) (env : Env)
+    (deadline? : Option BudgetDeadline := none) :
+    IO (Array DataPoint × Option Nat × Option Nat × Bool) := do
   let ladder := paramLadder spec.config
   let mut points : Array DataPoint := #[]
   let mut lastOk : Option Nat := none
   let mut firstFail : Option Nat := none
+  let mut truncated := false
   for param in ladder do
     if firstFail.isSome then break
+    if (← deadlineExceeded? deadline?) then
+      truncated := true
+      break
     -- Probe runs one trial per rung — see the docstring rationale.
     let rung ← runRungTrials spec param 1 (some env)
     points := points ++ rung
     if rungAnyOk rung then lastOk := some param
     else firstFail := some param
-  return (points, lastOk, firstFail)
+  return (points, lastOk, firstFail, truncated)
 
 /-- After the doubling probe, top up the trials at every successful
     probe rung so each verdict-eligible param ends up with
@@ -407,11 +438,19 @@ private def runDoublingProbe (spec : BenchmarkSpec) (env : Env) :
     (the probe contributed index 0). If a top-up trial fails, it still
     gets recorded — we want the user to see the flake rather than have
     it silently dropped — but it doesn't change `lastOk`/`firstFail`
-    since those were settled by the probe. Issue #4. -/
+    since those were settled by the probe. Issue #4.
+
+    Returns the accumulated points plus a `budgetTruncated` flag —
+    `true` iff the deadline cut the top-up loop short before every
+    successful probe rung had its full cluster (issue #9). With
+    `deadline? = none` the flag is always `false` and behaviour
+    matches the pre-#9 helper. -/
 private def topUpDoublingTrials (spec : BenchmarkSpec) (env : Env)
-    (probePoints : Array DataPoint) : IO (Array DataPoint) := do
+    (probePoints : Array DataPoint)
+    (deadline? : Option BudgetDeadline := none) :
+    IO (Array DataPoint × Bool) := do
   let extraTrials := spec.config.outerTrials - 1
-  if extraTrials == 0 then return probePoints
+  if extraTrials == 0 then return (probePoints, false)
   -- Distinct ok params in probe order.
   let mut seen : Std.HashSet Nat := {}
   let mut okParams : Array Nat := #[]
@@ -420,11 +459,16 @@ private def topUpDoublingTrials (spec : BenchmarkSpec) (env : Env)
       seen := seen.insert dp.param
       okParams := okParams.push dp.param
   let mut acc := probePoints
+  let mut hitDeadline := false
   for p in okParams do
+    if hitDeadline then break
     for i in [0 : extraTrials] do
+      if (← deadlineExceeded? deadline?) then
+        hitDeadline := true
+        break
       let dp ← runOneBatch spec p (some env)
       acc := acc.push { dp with trialIndex := i + 1 }
-  return acc
+  return (acc, hitDeadline)
 
 /-- Resolve `.auto` to either `.doubling` or a sensible `.linear`.
     `.custom` and the explicit shapes pass through unchanged. -/
@@ -502,8 +546,16 @@ def measureSpawnFloor (env : Env) : IO (Option Nat) := do
     via `setup_benchmark`. The merged config is validated before any
     subprocesses spawn, so e.g. a negative `--max-seconds-per-call`
     or `paramFloor > paramCeiling` produces a user-facing error rather
-    than an empty ladder. -/
-def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
+    than an empty ladder.
+
+    The optional `deadline?` (issue #9) is an absolute monotonic-clock
+    instant past which the ladder stops scheduling new rungs. The
+    result's `budgetTruncated` field flips to `true` when the deadline
+    cuts the run short. Each child spawn is still independently capped
+    by `maxSecondsPerCall`, so the budget can be exceeded by at most
+    one in-flight rung. -/
+def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
+    (deadline? : Option BudgetDeadline := none) :
     IO BenchmarkResult := do
   let some entry ← findRuntimeEntry name
     | throw (.userError s!"unregistered benchmark: {name}")
@@ -525,9 +577,13 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
   -- For all other schedules the probe runs first and then optionally
   -- a linear bracket sweep is added.
   let mut points : Array DataPoint := #[]
+  let mut budgetTruncated := false
   match schedule with
   | .custom params =>
     for n in params do
+      if (← deadlineExceeded? deadline?) then
+        budgetTruncated := true
+        break
       let rung ← runRungTrials spec n cfg.outerTrials (some env)
       points := points ++ rung
       -- Stop the ladder only when EVERY trial at this rung failed.
@@ -535,13 +591,21 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
       -- of the schedule (Codex review).
       unless rungAnyOk rung do break
   | _ =>
-    let (probePoints, lastOk?, firstFail?) ← runDoublingProbe spec env
+    let (probePoints, lastOk?, firstFail?, probeBudgetCut) ←
+      runDoublingProbe spec env deadline?
     points := probePoints
+    if probeBudgetCut then budgetTruncated := true
+    -- Skip post-probe work when the probe was budget-truncated;
+    -- we already lack a complete bracket and additional spawns
+    -- would burn over-budget without improving the verdict.
+    if budgetTruncated then pure () else
     match schedule with
     | .doubling =>
       -- Probe rows ARE the verdict data here. Top up every successful
-      -- probe rung to `outerTrials` measurements.
-      points ← topUpDoublingTrials spec env points
+      -- probe rung to `outerTrials` measurements (subject to budget).
+      let (topped, cut) ← topUpDoublingTrials spec env points deadline?
+      points := topped
+      if cut then budgetTruncated := true
     | .custom _ => pure ()  -- unreachable in this branch
     | .auto => pure ()  -- unreachable after resolveSchedule
     | .linear samples =>
@@ -566,6 +630,9 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
           -- don't enter `cMin`/`cMax`/slope.
           points := points.map ({ · with partOfVerdict := false })
           for n in rungs do
+            if (← deadlineExceeded? deadline?) then
+              budgetTruncated := true
+              break
             let rung ← runRungTrials spec n cfg.outerTrials (some env)
             points := points ++ rung
             -- Stop the sweep only when EVERY trial at this rung failed.
@@ -574,14 +641,19 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {}) :
         -- No bracket (doubling ran clean to ceiling, or first rung failed).
         -- Fall back to doubling-only — top up trials so the verdict
         -- cluster is the full configured size.
-        points ← topUpDoublingTrials spec env points
+        let (topped, cut) ← topUpDoublingTrials spec env points deadline?
+        points := topped
+        if cut then budgetTruncated := true
   let spawnFloor ← measureSpawnFloor env
   -- Annotate below-floor rows BEFORE summarising so the verdict
   -- ratios and the advisory list see the same filtered view.
   let annotated :=
     annotateBelowSignalFloor cfg.signalFloorMultiplier spawnFloor points
   let summary := Stats.summarize spec entry.complexity annotated
-  return { summary with spawnFloorNanos? := spawnFloor, env? := some env }
+  return { summary with
+    spawnFloorNanos? := spawnFloor,
+    env? := some env,
+    budgetTruncated }
 
 /-! ## Fixed-benchmark orchestration -/
 
@@ -734,9 +806,14 @@ private def computeHashAgreement (points : Array FixedDataPoint) : Bool := Id.ru
 
 /-- Run one fixed benchmark end-to-end: optional warmup, then
     `cfg.repeats` measured calls. Each measured call is its own
-    child spawn so the kill-on-cap machinery covers it. -/
+    child spawn so the kill-on-cap machinery covers it.
+
+    The optional `deadline?` (issue #9) lets the caller stop the
+    repeat loop early when a CI budget has been exhausted; the
+    result's `budgetTruncated` field flips to `true` in that case. -/
 def runFixedBenchmark (name : Lean.Name)
-    (override : FixedConfigOverride := {}) : IO FixedResult := do
+    (override : FixedConfigOverride := {})
+    (deadline? : Option BudgetDeadline := none) : IO FixedResult := do
   let some entry ← findFixedRuntimeEntry name
     | throw (.userError s!"unregistered fixed benchmark: {name}")
   let cfg := override.apply entry.spec.config
@@ -751,7 +828,11 @@ def runFixedBenchmark (name : Lean.Name)
   if cfg.warmup then
     let _ ← runFixedOneBatch entry.spec cfg 0 (some env)
   let mut points : Array FixedDataPoint := #[]
+  let mut budgetTruncated := false
   for i in [0 : cfg.repeats] do
+    if (← deadlineExceeded? deadline?) then
+      budgetTruncated := true
+      break
     let dp ← runFixedOneBatch entry.spec cfg i (some env)
     points := points.push dp
   let okNanos : Array Nat := points.filterMap fun dp =>
@@ -773,6 +854,7 @@ def runFixedBenchmark (name : Lean.Name)
     maxNanos?
     hashesAgree
     env? := some env
+    budgetTruncated
   }
 
 end LeanBench

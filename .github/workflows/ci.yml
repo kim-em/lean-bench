@@ -69,6 +69,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/tags_benchmark_test
 
+      - name: CI-budget mode test (issue #9)
+        shell: bash
+        run: ./.lake/build/bin/budget_benchmark_test
+
       - name: end-to-end run/compare test
         shell: bash
         run: ./.lake/build/bin/e2e_benchmark_test

@@ -328,7 +328,8 @@ def fmtResult (r : BenchmarkResult) (includeEnv : Bool := true) : String := Id.r
     match r.config.cacheMode with
     | .warm => "warm"
     | .cold => "cold"
-  let headerLine := s!"{r.function}    expected complexity: {r.complexityFormula}    [{modeTag} cache]"
+  let truncTag := if r.budgetTruncated then "    [budget truncated]" else ""
+  let headerLine := s!"{r.function}    expected complexity: {r.complexityFormula}    [{modeTag} cache]{truncTag}"
   let envLine? : Option String :=
     match r.env? with
     | some env => if includeEnv then some s!"  env: {RunEnv.fmtConcise env}" else none
@@ -482,6 +483,24 @@ def fmtResultWithAutoFit (r : BenchmarkResult) : String :=
   if extraLines.isEmpty then baseReport
   else baseReport ++ "\n" ++ "\n".intercalate extraLines.toList
 
+/-- Render the CI-budget summary block printed at the end of a
+    budgeted suite run (issue #9). One header line summarising
+    completed / skipped / truncated counts plus one bullet per
+    skipped benchmark, so partial-suite runs are explicit in the
+    terminal output. -/
+def fmtBudgetSummary (totalSeconds elapsedSeconds : Float)
+    (completed truncated : Nat)
+    (skipped : Array (Lean.Name × String)) : String := Id.run do
+  let mut lines : Array String := #[]
+  let header :=
+    s!"budget: {fmtFloat3 totalSeconds}s; elapsed {fmtFloat3 elapsedSeconds}s; " ++
+    s!"completed {completed}, skipped {skipped.size}" ++
+    (if truncated > 0 then s!", truncated {truncated}" else "")
+  lines := lines.push header
+  for (n, kind) in skipped do
+    lines := lines.push s!"  [budget skip] {n}    [{kind}]"
+  return "\n".intercalate lines.toList
+
 /-- One-line summary of a registered benchmark, used by `list`. -/
 def fmtSpec (spec : BenchmarkSpec) : String :=
   let h := if spec.hashable then "" else "  (no Hashable)"
@@ -502,7 +521,8 @@ def fmtFixedSpec (spec : FixedSpec) : String :=
     print env, comparison reports suppress per-block env and print
     once at the top. -/
 def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.run do
-  let header := s!"{r.function}    [fixed] repeats={r.config.repeats}"
+  let truncTag := if r.budgetTruncated then "    [budget truncated]" else ""
+  let header := s!"{r.function}    [fixed] repeats={r.config.repeats}{truncTag}"
   let mut lines : Array String := #[header]
   match r.env? with
   | some env =>
