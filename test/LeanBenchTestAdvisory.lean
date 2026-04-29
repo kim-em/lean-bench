@@ -214,6 +214,47 @@ def testFmtResultAdvisoryLines : IO UInt32 := do
       return 1
   return 0
 
+/-- Issue #46: when the schedule is `.custom`, the advisory must NOT
+    suggest `--param-ceiling` / `--param-floor` (silently inert) and
+    SHOULD point at the declared array. -/
+def testFmtResultAdvisoryCustomSchedule : IO UInt32 := do
+  let customResult : BenchmarkResult :=
+    { function := `Sample.custom
+    , complexityFormula := "n"
+    , hashable := true
+    , config :=
+        { maxSecondsPerCall := 1.0
+          signalFloorMultiplier := 10.0
+          paramSchedule := .custom #[1024, 2048, 4096] }
+    , points := #[mkOk 2 1 1.0]
+    , ratios := #[]
+    , verdict := .inconclusive
+    , cMin? := none
+    , cMax? := none
+    , verdictDroppedLeading := 0
+    , slope? := none
+    , spawnFloorNanos? := some 100
+    , advisories := #[
+        .belowSignalFloor,
+        .partiallyBelowSignalFloor 1 4,
+        .allCapped,
+        .truncatedAtCap 16,
+        .tooFewVerdictRows 1 ] }
+  let rendered := Format.fmtResult customResult
+  -- The five advisory lines together must not mention the inert flags.
+  for forbidden in ["--param-ceiling", "--param-floor"] do
+    if containsSub rendered forbidden then
+      IO.eprintln s!"unexpected '{forbidden}' in `.custom` advisory:\n{rendered}"
+      return 1
+  -- Each schedule-aware suggestion lands.
+  for needle in ["extend the declared `paramSchedule := .custom",
+                 "trim the largest params from the declared",
+                 "Drop the smallest params from the declared"] do
+    unless containsSub rendered needle do
+      IO.eprintln s!"missing schedule-aware suggestion '{needle}' in:\n{rendered}"
+      return 1
+  return 0
+
 /-! ## `.custom` ladder semantics
 
 Pure config layer — drive `runBenchmark` with the `.custom` schedule
@@ -248,6 +289,46 @@ def testCustomLadder : IO UInt32 := do
   -- All-ok prefix — the params are tiny, nothing should hit the cap.
   -- The ladder is exactly the declared list.
   expectEq "custom.params" observed #[3, 5, 7, 11]
+  return 0
+
+/-- Capture stderr of `act` into a string, restoring the previous
+    stream afterward. -/
+private def captureStderr (act : IO α) : IO (String × α) := do
+  let bufRef ← IO.mkRef ({} : IO.FS.Stream.Buffer)
+  let prev ← IO.setStderr (IO.FS.Stream.ofBuffer bufRef)
+  try
+    let a ← act
+    let buf ← bufRef.get
+    let captured := String.fromUTF8! buf.data
+    return (captured, a)
+  finally
+    discard <| IO.setStderr prev
+
+/-- Issue #46: passing `--param-ceiling` (or `--param-floor`) when the
+    registration pins `paramSchedule := .custom` is silently inert,
+    so we surface a stderr `note:` so a CI run can't appear to have
+    honoured a knob it didn't. -/
+def testCustomInertOverrideWarning : IO UInt32 := do
+  let override : ConfigOverride :=
+    { paramCeiling? := some 1_000_000
+      paramFloor?   := some 1 }
+  let (stderrText, _) ← captureStderr (runBenchmark customName override)
+  for needle in ["--param-ceiling", "--param-floor", "`.custom`"] do
+    unless containsSub stderrText needle do
+      IO.eprintln s!"missing '{needle}' in stderr:\n{stderrText}"
+      return 1
+  return 0
+
+/-- Switching the schedule shape via `--param-schedule` makes the
+    floor/ceiling overrides effective, so no warning should fire. -/
+def testCustomShapeSwitchSilencesWarning : IO UInt32 := do
+  let override : ConfigOverride :=
+    { paramCeiling?   := some 16
+      paramSchedule?  := some .doubling }
+  let (stderrText, _) ← captureStderr (runBenchmark customName override)
+  if containsSub stderrText "ignored" then
+    IO.eprintln s!"unexpected inert-override note when shape switched:\n{stderrText}"
+    return 1
   return 0
 
 /-- An empty `.custom` ladder is rejected up front by config validation
@@ -305,7 +386,10 @@ def runTests : IO UInt32 := do
       ("advisory.ordinaryRunIsEmpty", testAdvisoryOrdinaryRunIsEmpty),
       ("fmtResult.belowFloorMark", testFmtResultBelowFloorMark),
       ("fmtResult.advisoryLines",  testFmtResultAdvisoryLines),
+      ("fmtResult.advisoryCustomSchedule", testFmtResultAdvisoryCustomSchedule),
       ("custom.ladder",            testCustomLadder),
+      ("custom.inertOverrideWarning", testCustomInertOverrideWarning),
+      ("custom.shapeSwitchSilencesWarning", testCustomShapeSwitchSilencesWarning),
       ("custom.emptyRejected",     testCustomEmptyRejected),
       ("custom.duplicateRejected", testCustomDuplicateRejected),
       ("signalFloorMultiplier.validated", testSignalFloorMultiplierValidated) ]

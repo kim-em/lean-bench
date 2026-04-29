@@ -537,6 +537,26 @@ def measureSpawnFloor (env : Env) : IO (Option Nat) := do
   let t₁ ← IO.monoNanosNow
   return some (t₁ - t₀)
 
+/-- Issue #46: warn on stderr when CLI `--param-floor` /
+    `--param-ceiling` are passed but the merged schedule is still
+    `.custom`, in which case the override is silently inert. The
+    `.custom` arm of `runBenchmark` walks the declared array verbatim;
+    floor and ceiling only steer the doubling/linear ladder generators.
+    Stay quiet when the user also passed `--param-schedule
+    doubling|linear` (which switches the shape away from `.custom`,
+    making floor/ceiling actually apply). -/
+private def warnInertParamOverrides (name : Lean.Name)
+    (override : ConfigOverride) (cfg : BenchmarkConfig) : IO Unit := do
+  match cfg.paramSchedule with
+  | .custom _ =>
+    let mut inert : Array String := #[]
+    if override.paramFloor?.isSome   then inert := inert.push "--param-floor"
+    if override.paramCeiling?.isSome then inert := inert.push "--param-ceiling"
+    unless inert.isEmpty do
+      let flags := String.intercalate ", " inert.toList
+      IO.eprintln s!"note: {flags} ignored for {name}: effective `paramSchedule` is `.custom`, which walks the declared params verbatim; pass `--param-schedule doubling` (or `linear`) to switch the shape, or edit the `.custom` array."
+  | _ => pure ()
+
 /-- Run one benchmark end-to-end: resolve the schedule, run the
     doubling probe, optionally do a bracket-internal linear sweep,
     then summarise.
@@ -563,6 +583,7 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
+  warnInertParamOverrides name override cfg
   -- Capture reproducibility metadata at *parent* run start (issue
   -- #11). The same snapshot is propagated to every child via
   -- `--env-json`, so all JSONL rows in this run stamp the *same*

@@ -157,29 +157,76 @@ private def rawRow (cMaybe : Option Float) (totalTrials : Nat) (dp : DataPoint) 
 private def customScheduleHint : String :=
   "use `where { paramSchedule := .custom #[...] }` to pin a tractable rung set"
 
+/-- Is the in-force schedule a declaration-pinned `.custom` array?
+The CLI cannot produce `.custom`, so seeing it in the merged config
+means the registration is dictating the rung set and `--param-floor` /
+`--param-ceiling` would be silently inert. The advisories below
+branch on this so suggestions point at the actual knob in force.
+Issue #46. -/
+private def isCustomSchedule (r : BenchmarkResult) : Bool :=
+  match r.config.paramSchedule with
+  | .custom _ => true
+  | _         => false
+
+/-- Suggestion phrasing for "the rungs need to reach larger params"
+under each schedule shape. `.custom` ignores `--param-ceiling`, so
+suggesting it would mislead — point at the declared array instead.
+Issue #46. -/
+private def raiseCeilingHint (r : BenchmarkResult) : String :=
+  if isCustomSchedule r then
+    "extend the declared `paramSchedule := .custom #[...]` array with larger params"
+  else
+    "raise `--param-ceiling`"
+
+/-- Suggestion phrasing for "the rungs need to stop short of large
+params". For `.custom` the user has to trim the declared array
+manually; `--param-ceiling` is inert. Issue #46. -/
+private def lowerCeilingHint (r : BenchmarkResult) : String :=
+  if isCustomSchedule r then
+    "trim the largest params from the declared `paramSchedule := .custom #[...]` array"
+  else
+    "lower `--param-ceiling`"
+
+/-- Suggestion phrasing for "skip the cold regime by starting from a
+larger param". Same `.custom` story — `--param-floor` is inert.
+Issue #46. -/
+private def raiseFloorHint (r : BenchmarkResult) : String :=
+  if isCustomSchedule r then
+    "drop the smallest params from the declared `paramSchedule := .custom #[...]` array"
+  else
+    "raise `--param-floor`"
+
+/-- The "or pin a custom array" tail only makes sense when the
+schedule isn't already `.custom`. Issue #46. -/
+private def orCustomScheduleTail (r : BenchmarkResult) : String :=
+  if isCustomSchedule r then "" else ", or " ++ customScheduleHint
+
 /-- Render one `Advisory` for a result as a single advisory line.
 Each message is structured as `‼ <symptom>; <suggestion>` so users
 see both why the harness is concerned and what knob to turn next.
-Issue #15. -/
+Issue #15. The suggestions are schedule-aware (issue #46): a `.custom`
+schedule pins the rungs at declaration time, so `--param-floor` /
+`--param-ceiling` are silently inert and the advisory points at the
+declared array instead. -/
 private def fmtAdvisory (r : BenchmarkResult) : Advisory → String
   | .belowSignalFloor =>
     let floorStr := match r.spawnFloorNanos? with
       | some n => s!" (per-spawn floor ≈ {fmtNanosStr n})"
       | none => ""
-    s!"  ‼ every measurement was below {fmtFloat3 r.config.signalFloorMultiplier}× the per-spawn floor{floorStr}; the function is too fast for child-process measurement at the configured params. Try `--param-ceiling` higher, wrap the function in a hot inner loop, or use `setup_fixed_benchmark` for a single-shot reading."
+    s!"  ‼ every measurement was below {fmtFloat3 r.config.signalFloorMultiplier}× the per-spawn floor{floorStr}; the function is too fast for child-process measurement at the configured params. Try the following: {raiseCeilingHint r}, wrap the function in a hot inner loop, or use `setup_fixed_benchmark` for a single-shot reading."
   | .partiallyBelowSignalFloor n total =>
-    s!"  ‼ {n}/{total} ok rows were below {fmtFloat3 r.config.signalFloorMultiplier}× the per-spawn floor; those rungs are excluded from the verdict. Raise `--param-floor` to skip the cold regime if the trimmed warmup isn't enough."
+    s!"  ‼ {n}/{total} ok rows were below {fmtFloat3 r.config.signalFloorMultiplier}× the per-spawn floor; those rungs are excluded from the verdict. {(raiseFloorHint r).capitalize} to skip the cold regime if the trimmed warmup isn't enough."
   | .allCapped =>
-    s!"  ‼ every measurement hit the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); no `ok` row landed. The benchmark is too slow at the configured params. Bump `--max-seconds-per-call`, lower `--param-ceiling`, or " ++ customScheduleHint ++ "."
+    s!"  ‼ every measurement hit the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); no `ok` row landed. The benchmark is too slow at the configured params. Bump `--max-seconds-per-call`, {lowerCeilingHint r}{orCustomScheduleTail r}."
   | .truncatedAtCap p =>
     -- Phrased order-agnostically: "later rungs were skipped" works
     -- for the doubling/linear ladders (ascending) and for `.custom`
     -- (whatever order the user listed). Codex flagged that
     -- "no rungs above this point" was misleading for sparse / non-
     -- monotone custom ladders.
-    s!"  ‼ ladder stopped at param={p} after hitting the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); subsequent rungs in the schedule were skipped. Raise the cap if you need to reach further, or " ++ customScheduleHint ++ "."
+    s!"  ‼ ladder stopped at param={p} after hitting the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); subsequent rungs in the schedule were skipped. Raise the cap if you need to reach further{orCustomScheduleTail r}."
   | .tooFewVerdictRows kept =>
-    s!"  ‼ only {kept} verdict-eligible row(s) survived warmup-trim + signal-floor filter; the verdict is below resolution. Lower `--warmup-fraction`, raise `--param-ceiling`, or " ++ customScheduleHint ++ "."
+    s!"  ‼ only {kept} verdict-eligible row(s) survived warmup-trim + signal-floor filter; the verdict is below resolution. Lower `--warmup-fraction`, {raiseCeilingHint r}{orCustomScheduleTail r}."
 
 /-- Render the per-param trial-summary block. One header line plus
 one data line per `TrialSummary`. Returns `#[]` when there is nothing
