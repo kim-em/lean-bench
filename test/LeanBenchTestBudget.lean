@@ -145,7 +145,10 @@ def testNegativeTotalSeconds : IO UInt32 := do
   return 0
 
 def testEndToEndBudget : IO UInt32 := do
-  let exportPath := "/tmp/lean_bench_budget_test.json"
+  -- Use a relative path rather than `/tmp/...` because Windows GHA
+  -- runners don't have `/tmp` mounted at the Lean syscall layer
+  -- (issue #9 review).
+  let exportPath := "lean_bench_budget_test_export.json"
   let _ ← (try IO.FS.removeFile exportPath catch _ => pure ())
   let code ← LeanBench.Cli.dispatch [
     "run",
@@ -163,6 +166,8 @@ def testEndToEndBudget : IO UInt32 := do
   expectTrue "export.hasSkip" (LeanBench.Cli.containsSub contents "budget_skip")
   expectTrue "export.totalSeconds"
     (LeanBench.Cli.containsSub contents "\"total_seconds\"")
+  -- Clean up so a re-run doesn't leave the artifact lying around.
+  let _ ← (try IO.FS.removeFile exportPath catch _ => pure ())
   IO.println "  ok  budget.endToEnd"
   return 0
 
