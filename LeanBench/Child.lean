@@ -1,6 +1,7 @@
 import Lean
 import LeanBench.Core
 import LeanBench.Env
+import LeanBench.MemStats
 import LeanBench.RunEnv
 import LeanBench.Schema
 
@@ -109,6 +110,11 @@ private def jsonOptHash : Option UInt64 → String
   | none => "null"
   | some h => s!"\"0x{String.ofList (Nat.toDigits 16 h.toNat)}\""
 
+/-- Render an `Option Nat` field as a JSON integer or `null`. -/
+private def jsonOptNat : Option Nat → String
+  | none => "null"
+  | some n => toString n
+
 /-- Render the captured `Env` as the inline `"env":{...}` field used
 on every JSONL row. We go via `Lean.Json.compress` rather than the
 hand-rolled string concatenation used elsewhere in this file so the
@@ -126,6 +132,7 @@ error rows. -/
 def emitRow
     (function : Lean.Name) (param innerRepeats totalNanos : Nat)
     (resultHash : Option UInt64) (status : Status) (env : Env)
+    (mem : MemStats := {})
     (cacheMode : CacheMode := .warm)
     (errorMsg? : Option String := none) :
     IO Unit := do
@@ -151,6 +158,8 @@ def emitRow
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
       s!"\"error\":{jsonOptStr errorMsg?}",
+      s!"\"alloc_bytes\":{jsonOptNat mem.allocBytes}",
+      s!"\"peak_rss_kb\":{jsonOptNat mem.peakRssKb}",
       jsonEnvFragment env
     ] ++ "}"
   IO.println row
@@ -210,7 +219,14 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
           -- fresh process".
           let (t, h) ← loop 1
           pure (1, t, h)
-      emitRow benchName param count total hash .ok env (cacheMode := cacheMode)
+      -- Capture memory metrics *after* the measured work but *before*
+      -- emitting the row. Issue #6. On Linux this reads
+      -- `/proc/self/status` for `VmHWM`; on other platforms both
+      -- fields collapse to `none` and render as JSON `null`. The
+      -- capture itself is best-effort and never fails the run.
+      let mem ← MemStats.capture
+      emitRow benchName param count total hash .ok env
+        (mem := mem) (cacheMode := cacheMode)
       return (0 : UInt32)
     catch e =>
       let msg := s!"runner threw: {e.toString}"
@@ -233,6 +249,7 @@ isolation machinery applies unchanged. -/
 def emitFixedRow
     (function : Lean.Name) (repeatIndex totalNanos : Nat)
     (resultHash : Option UInt64) (status : Status) (env : Env)
+    (mem : MemStats := {})
     (errorMsg? : Option String := none) :
     IO Unit := do
   let row :=
@@ -245,6 +262,8 @@ def emitFixedRow
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
       s!"\"error\":{jsonOptStr errorMsg?}",
+      s!"\"alloc_bytes\":{jsonOptNat mem.allocBytes}",
+      s!"\"peak_rss_kb\":{jsonOptNat mem.peakRssKb}",
       jsonEnvFragment env
     ] ++ "}"
   IO.println row
@@ -262,16 +281,18 @@ def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat)
   | none =>
     emitFixedRow benchName repeatIndex 0 none
       (.error s!"unregistered fixed benchmark: {benchName}") env
-      (some s!"unregistered fixed benchmark: {benchName}")
+      (errorMsg? := some s!"unregistered fixed benchmark: {benchName}")
     return 1
   | some entry =>
     try
       let (total, hash) ← entry.runner
-      emitFixedRow benchName repeatIndex total hash .ok env
+      let mem ← MemStats.capture
+      emitFixedRow benchName repeatIndex total hash .ok env (mem := mem)
       return (0 : UInt32)
     catch e =>
       let msg := s!"runner threw: {e.toString}"
-      emitFixedRow benchName repeatIndex 0 none (.error msg) env (some msg)
+      emitFixedRow benchName repeatIndex 0 none (.error msg) env
+        (errorMsg? := some msg)
       return (1 : UInt32)
 
 end LeanBench

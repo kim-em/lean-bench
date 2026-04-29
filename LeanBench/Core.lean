@@ -141,6 +141,21 @@ structure DataPoint where
       unchanged). Parent-side only — not serialized in the child JSONL;
       the parent assigns it after each spawn returns. Issue #4. -/
   trialIndex   : Nat := 0
+  /-- Total bytes allocated by the Lean runtime over the child
+      process's lifetime, captured at the end of the measurement.
+      `none` on every platform today — Lean 4 has no portable
+      in-process API to read this. The field exists so the wire
+      format, parsers, and report renderers all have a place for the
+      value to land once a future Lean release exposes allocation
+      counters. Issue #6. -/
+  allocBytes : Option Nat := none
+  /-- Peak resident-set size in kibibytes for the child process at
+      the end of the measurement. Captured on Linux from
+      `/proc/self/status`'s `VmHWM:` line; `none` on macOS, Windows,
+      and any other platform without `/proc`. Best-effort — every
+      capture failure (missing file, permission denied) collapses to
+      `none` rather than aborting the measurement. Issue #6. -/
+  peakRssKb  : Option Nat := none
   deriving Repr, Inhabited
 
 /-- Heuristic verdict — see SPEC v0.1: weak labels by design. Decided
@@ -750,6 +765,10 @@ structure FixedDataPoint where
   /-- Present iff the benchmark's value type has `Hashable`. -/
   resultHash  : Option UInt64
   status      : Status
+  /-- Memory metrics — same semantics as on `DataPoint`, captured at
+      the end of the child invocation. Issue #6. -/
+  allocBytes  : Option Nat := none
+  peakRssKb   : Option Nat := none
   deriving Repr, Inhabited
 
 /-- Result of a single fixed-benchmark run. -/

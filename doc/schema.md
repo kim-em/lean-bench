@@ -98,6 +98,8 @@ were `null`.
 | `result_hash`      | string \| null   | Hex-prefixed `0xDEADBEEF` literal (case-insensitive). `null` when the function's return type lacks `Hashable`. |
 | `error`            | string \| null   | Free-form message for `status == "error"`. `null` otherwise. |
 | `env`              | object \| null   | Reproducibility metadata captured at child startup — see [Environment metadata](#environment-metadata). Emitted on every row by current writers; absence is tolerated for back-compat with hand-rolled fixtures. |
+| `alloc_bytes`      | integer \| null  | Total bytes allocated by the Lean runtime over the child's lifetime. Always `null` today — Lean 4 has no portable in-process API to read this. The key is reserved so the field can land additively when a future Lean release exposes allocation counters. See [Memory metrics](#memory-metrics). |
+| `peak_rss_kb`      | integer \| null  | Peak resident-set size of the child process, in kibibytes (1024 bytes). On Linux read from `/proc/self/status` (`VmHWM:`); `null` on macOS, Windows, and any other platform without `/proc`. See [Memory metrics](#memory-metrics). |
 
 `kind` is also classified as optional from the reader's standpoint
 (absence defaults to `"parametric"`), but every current writer emits
@@ -117,7 +119,6 @@ schema and will land as additive (non-breaking) fields. They are
 listed here so concurrent feature work claims a stable name from
 the start:
 
-- `alloc_bytes`, `peak_rss_kb` — memory metrics ([#6]).
 - `budget_status` — additional status discriminator for budgeted-run
   rows that were skipped or partially completed ([#9]).
 
@@ -168,6 +169,60 @@ will break the build.
 The same env snapshot also rides on the in-memory
 `BenchmarkResult` / `FixedResult` (parent-side capture) and is
 surfaced as a one-line summary in human-readable reports.
+
+## Memory metrics
+
+Two optional fields on every row record per-child memory behaviour
+(issue #6). They sit alongside `total_nanos` so a regression that
+preserves wall-clock time but allocates more memory or balloons RSS
+is still visible.
+
+| field         | unit       | source                                                 | available on    |
+|---------------|------------|--------------------------------------------------------|-----------------|
+| `alloc_bytes` | bytes      | not yet captured — Lean 4 has no portable in-process API | nowhere today |
+| `peak_rss_kb` | kibibytes  | `/proc/self/status` `VmHWM:` line, read by the child   | Linux           |
+
+**Interpretation:**
+
+- The values describe the **child process** for one batch (one
+  `runOneBatch` / `runFixedOneBatch` invocation), not the parent.
+  In `cache_mode == "warm"`, the child runs `inner_repeats`
+  iterations of the function in a single process, so `peak_rss_kb`
+  is the peak RSS observed across that whole batch (which is what
+  you usually want — a function whose RSS spikes once per call
+  shows up in `peak_rss_kb`). In `cache_mode == "cold"`, each rung
+  is its own child, so `peak_rss_kb` is the per-call peak RSS.
+- `peak_rss_kb` includes the Lean runtime's own footprint (bytecode,
+  static GC roots, the harness itself), not just the function under
+  test. It is most useful as a **delta across runs** of the same
+  benchmark, not as an absolute "this function uses N kB" reading.
+- `alloc_bytes` is currently always `null`. It is reserved in the
+  schema so downstream tooling can opt in to reading it once a Lean
+  release exposes allocation counters in-process; until then,
+  consumers should treat it as "not measured" rather than "zero".
+
+**Platform support:**
+
+- **Linux**: `peak_rss_kb` populated from the kernel's `/proc/self/status`
+  `VmHWM:` field. The kernel updates `VmHWM` continuously as the
+  process's RSS grows, so reading it once at the end of a batch
+  gives the true peak across the whole run.
+- **macOS / Windows / Emscripten**: `peak_rss_kb` is `null`. Reading
+  peak RSS portably on those platforms requires either FFI
+  (`getrusage` on macOS, `GetProcessMemoryInfo` on Windows) or a
+  per-batch subprocess shell-out (e.g. `ps`), and a per-batch shell
+  would itself dominate the metric for fast benchmarks. Adding a
+  platform-specific probe is tracked as future work.
+
+**Reading them:**
+
+- Both keys are documented as optional and **may** be `null`. Readers
+  must tolerate `null` and treat it as "no measurement" — never as
+  zero.
+- Both are emitted on every row by current writers (the writers stamp
+  `null` when the platform can't supply a value), but readers must
+  also tolerate the keys being absent entirely, in line with the
+  general "tolerate missing optional keys" rule.
 
 ## Compatibility
 

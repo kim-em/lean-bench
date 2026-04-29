@@ -56,9 +56,16 @@ def requiredFixedKeys : Array String :=
   #["repeat_index"]
 
 /-- Optional keys emitted on every row today. Absence is equivalent
-    to `null`. -/
+    to `null`.
+
+`alloc_bytes` and `peak_rss_kb` are the issue #6 memory metrics. They
+are emitted on every row by current writers (so the schema-stability
+test can assert their presence in the canonical key set), but each
+field is platform-best-effort: on platforms or workloads where the
+metric isn't available the writer emits JSON `null` rather than
+omitting the key. Readers MUST tolerate either form. -/
 def optionalCommonKeys : Array String :=
-  #["kind", "result_hash", "error", "env"]
+  #["kind", "result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
 
 /-- Optional keys emitted only on parametric rows today. -/
 def optionalParametricKeys : Array String :=

@@ -147,7 +147,9 @@ def dataPointToJson (dp : DataPoint) : Json :=
     ("result_hash",       jOptHash dp.resultHash),
     ("trial_index",       jNat dp.trialIndex),
     ("part_of_verdict",   jBool dp.partOfVerdict),
-    ("below_signal_floor", jBool dp.belowSignalFloor)
+    ("below_signal_floor", jBool dp.belowSignalFloor),
+    ("alloc_bytes",       jOptNat dp.allocBytes),
+    ("peak_rss_kb",       jOptNat dp.peakRssKb)
   ]
 
 def fixedDataPointToJson (dp : FixedDataPoint) : Json :=
@@ -155,7 +157,9 @@ def fixedDataPointToJson (dp : FixedDataPoint) : Json :=
     ("repeat_index", jNat dp.repeatIndex),
     ("total_nanos",  jNat dp.totalNanos),
     ("status",       jStr (statusToString dp.status)),
-    ("result_hash",  jOptHash dp.resultHash)
+    ("result_hash",  jOptHash dp.resultHash),
+    ("alloc_bytes",  jOptNat dp.allocBytes),
+    ("peak_rss_kb",  jOptNat dp.peakRssKb)
   ]
 
 def benchmarkConfigToJson (c : BenchmarkConfig) : Json :=
@@ -314,7 +318,9 @@ def dataPointFromJson (j : Json) : DataPoint :=
     resultHash       := resultHash
     trialIndex       := getNat j "trial_index"
     partOfVerdict    := getBool j "part_of_verdict" true
-    belowSignalFloor := getBool j "below_signal_floor" }
+    belowSignalFloor := getBool j "below_signal_floor"
+    allocBytes       := getOptNat j "alloc_bytes"
+    peakRssKb        := getOptNat j "peak_rss_kb" }
 
 def fixedDataPointFromJson (j : Json) : FixedDataPoint :=
   let hashStr := getOptStr j "result_hash"
@@ -322,7 +328,9 @@ def fixedDataPointFromJson (j : Json) : FixedDataPoint :=
   { repeatIndex := getNat j "repeat_index"
     totalNanos  := getNat j "total_nanos"
     status      := parseStatus (getStr j "status")
-    resultHash  := resultHash }
+    resultHash  := resultHash
+    allocBytes  := getOptNat j "alloc_bytes"
+    peakRssKb   := getOptNat j "peak_rss_kb" }
 
 private def parseParamSchedule (j : Json) (k : String) : ParamSchedule :=
   match j.getObjVal? k with

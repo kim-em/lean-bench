@@ -106,9 +106,20 @@ def parseChildRow (line : String) : Except String DataPoint := do
     | "error" =>
         .error ((json.getObjValAs? String "error").toOption.getD "")
     | _ => .error s!"unknown status: {statusStr}"
+  -- Memory metrics (issue #6) — both optional, both may be JSON `null`
+  -- on platforms that can't supply them. A type mismatch or an
+  -- explicit `null` collapses to `none`; absence likewise.
+  let allocBytes : Option Nat :=
+    match json.getObjValAs? Nat "alloc_bytes" with
+    | .ok n => some n
+    | .error _ => none
+  let peakRssKb : Option Nat :=
+    match json.getObjValAs? Nat "peak_rss_kb" with
+    | .ok n => some n
+    | .error _ => none
   return {
     param, innerRepeats, totalNanos, perCallNanos,
-    resultHash, status }
+    resultHash, status, allocBytes, peakRssKb }
 
 /-- Synthesize a row when the child died before emitting. -/
 def synthRow (param : Nat) (status : Status) : DataPoint :=
@@ -595,7 +606,16 @@ def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
     | "error" =>
         .error ((json.getObjValAs? String "error").toOption.getD "")
     | _ => .error s!"unknown status: {statusStr}"
-  return { repeatIndex, totalNanos, resultHash, status }
+  let allocBytes : Option Nat :=
+    match json.getObjValAs? Nat "alloc_bytes" with
+    | .ok n => some n
+    | .error _ => none
+  let peakRssKb : Option Nat :=
+    match json.getObjValAs? Nat "peak_rss_kb" with
+    | .ok n => some n
+    | .error _ => none
+  return { repeatIndex, totalNanos, resultHash, status,
+           allocBytes, peakRssKb }
 
 private def synthFixedRow (idx : Nat) (status : Status) : FixedDataPoint :=
   { repeatIndex := idx, totalNanos := 0, resultHash := none, status }

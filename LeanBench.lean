@@ -1,6 +1,7 @@
 import LeanBench.Core
 import LeanBench.Schema
 import LeanBench.Env
+import LeanBench.MemStats
 import LeanBench.RunEnv
 import LeanBench.Setup
 import LeanBench.Child
