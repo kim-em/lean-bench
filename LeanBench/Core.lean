@@ -372,6 +372,13 @@ structure ConfigOverride where
   /-- Override the number of outer trials per measured rung. CLI
       exposes this as `--outer-trials N`. Issue #4. -/
   outerTrials?           : Option Nat := none
+  /-- Override the per-spawn signal-floor multiplier. CLI exposes
+      this as `--signal-floor-multiplier`. `1.0` disables the filter
+      entirely (no rows are flagged `[<floor]`); higher values are
+      more aggressive about excluding cold rungs. Useful in CI smoke
+      tests on slow runners where the per-spawn floor would otherwise
+      swallow every rung at the chosen `--param-ceiling`. Issue #47. -/
+  signalFloorMultiplier? : Option Float := none
   deriving Inhabited, Repr
 
 /-- Merge a CLI `paramSchedule` override on top of a declared
@@ -405,7 +412,8 @@ def ConfigOverride.apply (o : ConfigOverride) (c : BenchmarkConfig) :
     killGraceMs           := o.killGraceMs?.getD           c.killGraceMs
     paramSchedule         := mergeParamSchedule o.paramSchedule? c.paramSchedule
     cacheMode             := o.cacheMode?.getD             c.cacheMode
-    outerTrials           := o.outerTrials?.getD           c.outerTrials }
+    outerTrials           := o.outerTrials?.getD           c.outerTrials
+    signalFloorMultiplier := o.signalFloorMultiplier?.getD c.signalFloorMultiplier }
 
 /-- Validate a `BenchmarkConfig`. The macro accepts arbitrary user
 expressions and the CLI accepts arbitrary JSON-style numbers, so

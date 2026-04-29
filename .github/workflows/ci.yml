@@ -112,6 +112,15 @@ jobs:
       # invocation pins `--param-schedule doubling` so the new flag
       # is exercised end-to-end on every CI run, not just the
       # parser-level test.
+      #
+      # `--signal-floor-multiplier 1.0` disables the per-spawn floor
+      # filter for this smoke test (issue #47): on slow runners
+      # (Windows GHA in particular has a ~50ms spawn floor) the
+      # default 10× multiplier flags every rung at --param-ceiling
+      # 1024 as `[<floor]`, which now correctly produces exit 2 — but
+      # this step is testing the override-flag pipeline, not floor
+      # filtering. Disabling the filter keeps the smoke test honest
+      # about what it covers.
       - name: fib example run with CLI overrides
         shell: bash
         run: |
@@ -119,24 +128,26 @@ jobs:
             LeanBench.Examples.Fib.goodFib \
             --max-seconds-per-call 0.5 \
             --param-ceiling 1024 \
-            --slope-tolerance 0.5
+            --slope-tolerance 0.5 \
+            --signal-floor-multiplier 1.0
           ./.lake/build/bin/fib_benchmark_example run \
             LeanBench.Examples.Fib.goodFib \
             --max-seconds-per-call 0.5 \
             --param-ceiling 256 \
             --param-schedule doubling \
-            --slope-tolerance 0.5
+            --slope-tolerance 0.5 \
+            --signal-floor-multiplier 1.0
 
       # End-to-end smoke test for issue #8: --auto-fit must execute
       # against a real benchmark, exit cleanly, and append the
       # heuristic block. The unit-test exe (auto_fit_benchmark_test)
       # pins the ranking logic on synthetic data; this step just
-      # validates the flag plumbing across the spawn pipeline. We
-      # don't assert the winner row because CI runner spawn-floor
-      # noise (especially Windows / macOS) can drag enough rungs
-      # below the signal floor that no model lands a verdict-eligible
-      # rung — that's a measurement edge case, not a regression in
-      # the auto-fit code.
+      # validates the flag plumbing across the spawn pipeline.
+      #
+      # `--signal-floor-multiplier 1.0` disables the per-spawn floor
+      # filter (issue #47): on slow runners every rung would otherwise
+      # land below floor and the run would correctly exit 2. This
+      # step is testing --auto-fit plumbing, not floor handling.
       - name: fib example run with --auto-fit
         shell: bash
         run: |
@@ -145,6 +156,7 @@ jobs:
             --max-seconds-per-call 0.5 \
             --param-ceiling 1024 \
             --slope-tolerance 0.5 \
+            --signal-floor-multiplier 1.0 \
             --auto-fit)
           echo "$out"
           echo "$out" | grep -q "auto-fit (heuristic" \
