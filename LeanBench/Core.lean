@@ -618,6 +618,14 @@ structure BenchmarkResult where
       downstream tools that only see the wire format can recover it
       independently. -/
   env? : Option Env := none
+  /-- True when the ladder was cut short by a CI-budget deadline
+      (`--total-seconds`, issue #9). The recorded `points` reflect the
+      rungs that did run before the deadline; the rungs that would
+      have followed never ran. The verdict is still computed from
+      whatever data landed, so a budget-truncated result is meaningful
+      but typically less reliable than a full ladder. Default `false`
+      for runs without a budget. -/
+  budgetTruncated : Bool := false
   deriving Inhabited, Repr
 
 /-- One diverging param in a `compare`: the param at which results
@@ -795,6 +803,10 @@ structure FixedResult where
   /-- Reproducibility metadata captured at parent run start (issue
       #11). Same semantics as on `BenchmarkResult`. -/
   env? : Option Env := none
+  /-- True when the run was cut short by a CI-budget deadline
+      (`--total-seconds`, issue #9). Recorded `points` reflect the
+      repeats that completed before the deadline. Default `false`. -/
+  budgetTruncated : Bool := false
   deriving Inhabited, Repr
 
 /-- A single fixed-benchmark divergence record: the per-function

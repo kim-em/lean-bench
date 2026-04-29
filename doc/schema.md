@@ -119,11 +119,24 @@ schema and will land as additive (non-breaking) fields. They are
 listed here so concurrent feature work claims a stable name from
 the start:
 
-- `budget_status` — additional status discriminator for budgeted-run
-  rows that were skipped or partially completed ([#9]).
+No keys are currently reserved — every previously-reserved name has
+either landed (`alloc_bytes` / `peak_rss_kb` from issue #6 are now
+real optional fields, listed above) or been released (`budget_status`
+from issue #9 was not needed; see below).
 
-Producers MUST NOT emit any of these keys with semantics other than
-the ones described in their landing PRs.
+Producers MUST NOT silently start emitting new keys with the same
+name as any landed field except as described in that field's
+landing PR.
+
+The CI-budget mode landed in issue [#9] surfaces budgeted-run state
+at the **export-document level** rather than per-row. There is no
+row-level `budget_status` field: a benchmark that's skipped because
+the budget was exhausted before it started doesn't produce any rows
+at all, and a benchmark whose ladder was cut short between rungs
+records `budgetTruncated` on the export's per-result object (see
+[Export budget summary](#export-budget-summary)). The reserved name
+`budget_status` was carried by earlier drafts of this schema doc but
+is now released; future feature work is free to claim it.
 
 [#6]:  https://github.com/kim-em/lean-bench/issues/6
 [#9]:  https://github.com/kim-em/lean-bench/issues/9
@@ -294,7 +307,8 @@ format do not force a bump of `export_schema_version`, and vice versa.
   "lean_bench_version": "0.1.0",
   "env": { ... },
   "results": [ ... ],
-  "baseline_comparison": [ ... ]
+  "baseline_comparison": [ ... ],
+  "budget": { ... }
 }
 ```
 
@@ -306,10 +320,62 @@ format do not force a bump of `export_schema_version`, and vice versa.
 - **`results`** (array): one entry per benchmark result. Each entry has
   a `"kind"` discriminator (`"parametric"` or `"fixed"`) and carries
   the full result data: points, ratios, verdict, config, trial
-  summaries, etc.
+  summaries, etc. Every result also carries `"budget_truncated"`
+  (boolean): `true` when the run was a CI-budget run and that
+  benchmark's ladder was cut short between rungs by the deadline.
 - **`baseline_comparison`** (array, optional): present when `--baseline`
   was used. One entry per matched function with per-param regression /
   improvement / stable classification.
+- **`budget`** (object, optional): present only when `--total-seconds`
+  was used. See [Export budget summary](#export-budget-summary).
+
+#### Export budget summary
+
+When the run was launched with `--total-seconds N` (issue #9), the
+export document carries a top-level `"budget"` object summarising
+which benchmarks ran, which were skipped, and how long the suite
+actually took:
+
+```json
+{
+  "budget": {
+    "total_seconds": 60.0,
+    "elapsed_seconds": 58.91,
+    "completed": 7,
+    "truncated": 1,
+    "skipped": [
+      {"function": "MyProject.Sort.runMergeSort",
+       "kind": "parametric",
+       "status": "budget_skip"},
+      {"function": "MyProject.Sort.runInsertion",
+       "kind": "parametric",
+       "status": "budget_skip"}
+    ]
+  }
+}
+```
+
+Field semantics:
+
+- **`total_seconds`** (number, required): the value of the
+  `--total-seconds` flag.
+- **`elapsed_seconds`** (number, required): wallclock seconds the
+  orchestrator actually spent before stopping.
+- **`completed`** (integer, required): number of benchmarks that ran
+  to a result (whether or not their ladders were truncated mid-flight).
+- **`truncated`** (integer, required): number of completed benchmarks
+  whose ladder was cut short between rungs by the deadline. Each
+  truncated result also carries `"budget_truncated": true` in its
+  `results` entry.
+- **`skipped`** (array, required): one entry per benchmark that didn't
+  run at all because the budget was exhausted before it could start.
+  Each entry has `function` (string), `kind` (`"parametric"` or
+  `"fixed"`), and `status` (always `"budget_skip"`). Order matches the
+  order benchmarks would have been scheduled in.
+
+CI consumers should treat `skipped` and `truncated > 0` as actionable
+information rather than failure: the run completed within the
+configured budget on purpose.
 
 ### Export versioning rules
 

@@ -214,6 +214,7 @@ def benchmarkResultToJson (r : BenchmarkResult) : Json :=
     ("spawn_floor_nanos",       jOptNat r.spawnFloorNanos?),
     ("advisories",              Json.arr (r.advisories.map (jStr <| advisoryToString ·))),
     ("trial_summaries",         Json.arr (r.trialSummaries.map trialSummaryToJson)),
+    ("budget_truncated",        jBool r.budgetTruncated),
     ("env",                     match r.env? with
                                 | some env => RunEnv.toJson env
                                 | none     => Json.null)
@@ -221,18 +222,41 @@ def benchmarkResultToJson (r : BenchmarkResult) : Json :=
 
 def fixedResultToJson (r : FixedResult) : Json :=
   Json.mkObj [
-    ("kind",          jStr "fixed"),
-    ("function",      jStr r.function.toString),
-    ("hashable",      jBool r.hashable),
-    ("config",        fixedBenchmarkConfigToJson r.config),
-    ("points",        Json.arr (r.points.map fixedDataPointToJson)),
-    ("median_nanos",  jOptNat r.medianNanos?),
-    ("min_nanos",     jOptNat r.minNanos?),
-    ("max_nanos",     jOptNat r.maxNanos?),
-    ("hashes_agree",  jBool r.hashesAgree),
-    ("env",           match r.env? with
-                      | some env => RunEnv.toJson env
-                      | none     => Json.null)
+    ("kind",             jStr "fixed"),
+    ("function",         jStr r.function.toString),
+    ("hashable",         jBool r.hashable),
+    ("config",           fixedBenchmarkConfigToJson r.config),
+    ("points",           Json.arr (r.points.map fixedDataPointToJson)),
+    ("median_nanos",     jOptNat r.medianNanos?),
+    ("min_nanos",        jOptNat r.minNanos?),
+    ("max_nanos",        jOptNat r.maxNanos?),
+    ("hashes_agree",     jBool r.hashesAgree),
+    ("budget_truncated", jBool r.budgetTruncated),
+    ("env",              match r.env? with
+                         | some env => RunEnv.toJson env
+                         | none     => Json.null)
+  ]
+
+/-- Serialize the suite-level CI-budget summary (issue #9). Carried at
+the top level of an export document under the `budget` key when the
+run was launched with `--total-seconds`. -/
+def budgetSummaryToJson
+    (totalSeconds elapsedSeconds : Float)
+    (completed truncated : Nat)
+    (skipped : Array (Name × String)) :
+    Json :=
+  let skippedJson : Array Json := skipped.map fun (n, kind) =>
+    Json.mkObj [
+      ("function", jStr n.toString),
+      ("kind",     jStr kind),
+      ("status",   jStr "budget_skip")
+    ]
+  Json.mkObj [
+    ("total_seconds",   jFloat totalSeconds),
+    ("elapsed_seconds", jFloat elapsedSeconds),
+    ("completed",       jNat completed),
+    ("truncated",       jNat truncated),
+    ("skipped",         Json.arr skippedJson)
   ]
 
 /-- Build the top-level export JSON document. -/
@@ -427,6 +451,7 @@ def benchmarkResultFromJson (j : Json) : Except String BenchmarkResult := do
     spawnFloorNanos?  := getOptNat j "spawn_floor_nanos"
     advisories        := #[]   -- not round-tripped; informational
     trialSummaries    := trialSummaries
+    budgetTruncated   := getBool j "budget_truncated"
     env?              := envFromJson? j "env"
   }
 
@@ -446,6 +471,7 @@ def fixedResultFromJson (j : Json) : Except String FixedResult := do
     minNanos?    := getOptNat j "min_nanos"
     maxNanos?    := getOptNat j "max_nanos"
     hashesAgree  := getBool j "hashes_agree" true
+    budgetTruncated := getBool j "budget_truncated"
     env?         := envFromJson? j "env"
   }
 
@@ -748,12 +774,16 @@ def baselineReportToJson (r : BaselineReport) : Json :=
     ("improvement_count", jNat r.improvementCount)
   ]
 
-/-- Build a full export document with optional baseline comparison. -/
+/-- Build a full export document with optional baseline comparison
+and optional CI-budget summary (issue #9). The `budget?` payload is
+the result of `budgetSummaryToJson`; when `none`, the document omits
+the `budget` key entirely so non-budgeted runs export unchanged. -/
 def toJsonWithBaseline
     (parametric : Array BenchmarkResult)
     (fixed : Array FixedResult)
     (env? : Option Env := none)
-    (baseline? : Option (Array BaselineReport) := none) :
+    (baseline? : Option (Array BaselineReport) := none)
+    (budget? : Option Json := none) :
     Json :=
   let results : Array Json :=
     (parametric.map benchmarkResultToJson) ++
@@ -761,7 +791,7 @@ def toJsonWithBaseline
   let comp := match baseline? with
     | some reports => Json.arr (reports.map baselineReportToJson)
     | none => Json.null
-  let fields : List (String × Json) := [
+  let baseFields : List (String × Json) := [
     ("export_schema_version", jNat exportSchemaVersion),
     ("lean_bench_version",    jStr libraryVersion),
     ("env",                   match env? with
@@ -769,9 +799,12 @@ def toJsonWithBaseline
                               | none     => Json.null),
     ("results",               Json.arr results)
   ]
-  let allFields := match baseline? with
-    | some _ => fields ++ [("baseline_comparison", comp)]
-    | none   => fields
+  let withBaseline := match baseline? with
+    | some _ => baseFields ++ [("baseline_comparison", comp)]
+    | none   => baseFields
+  let allFields := match budget? with
+    | some b => withBaseline ++ [("budget", b)]
+    | none   => withBaseline
   Json.mkObj allFields
 
 end Export

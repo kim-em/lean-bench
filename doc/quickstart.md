@@ -209,6 +209,111 @@ Tags and namespaces are complementary: namespaces give you
 hierarchical grouping, tags give you cross-cutting categories
 (e.g. `"fast"`, `"regression"`, `"nightly"`).
 
+## CI-budget mode
+
+For CI you usually want a benchmark suite that takes a predictable
+amount of time, not whatever total a full sweep happens to land on
+that day. `run` accepts a `--total-seconds N` flag that bounds the
+whole suite to roughly `N` seconds of wallclock time. It's a
+first-class feature: the harness schedules benchmarks against a
+monotonic-clock deadline rather than relying on shell-script
+`timeout` wrappers around the whole run.
+
+### How it works
+
+```bash
+$ lake exe bench run --tag regression --total-seconds 60
+```
+
+Mechanics:
+
+1. The orchestrator captures the start time and computes a deadline.
+2. Before each benchmark, it checks the deadline. Benchmarks that
+   would start past the deadline are recorded as `budget_skip`
+   entries — they appear in the terminal output and the export
+   document.
+3. The deadline is also threaded into `runBenchmark`. A benchmark
+   that's mid-ladder when the deadline trips finishes its current
+   rung (each rung is independently capped by `maxSecondsPerCall`)
+   and then stops; the result is tagged `budget_truncated`.
+4. The run still produces a partial verdict for whatever rungs
+   landed. Partial results aren't an error — they're the point of
+   budget mode.
+
+The bound on total wallclock time is approximately `total_seconds +
+maxSecondsPerCall`: at most one rung can be in flight when the
+deadline trips. There's no in-rung kill: a benchmark with a 30s
+`maxSecondsPerCall` can blow past a 5s budget by up to 30s. Tighten
+the per-call cap if you need a tighter bound.
+
+### Terminal output
+
+A budgeted run prints a one-line summary at the bottom plus a
+bullet per skipped benchmark:
+
+```
+budget: 60.000s; elapsed 58.910s; completed 7, skipped 2, truncated 1
+  [budget skip] MyProject.Sort.runMergeSort    [parametric]
+  [budget skip] MyProject.Sort.runInsertion    [parametric]
+```
+
+Each truncated benchmark's per-result header carries `[budget
+truncated]` in addition to the budget summary.
+
+### Machine-readable output
+
+When `--export-file FILE` is also passed, the export document gains
+a top-level `budget` object describing what happened:
+
+```json
+{
+  "budget": {
+    "total_seconds": 60.0,
+    "elapsed_seconds": 58.91,
+    "completed": 7,
+    "truncated": 1,
+    "skipped": [
+      {"function": "MyProject.Sort.runMergeSort",
+       "kind": "parametric",
+       "status": "budget_skip"}
+    ]
+  }
+}
+```
+
+Each result entry in `results[]` also carries
+`"budget_truncated": true|false`. See
+[`schema.md#export-budget-summary`](schema.md#export-budget-summary)
+for the full field reference and the schema-evolution rules.
+
+### CI example: GitHub Actions
+
+```yaml
+- name: Microbenchmarks (60s budget)
+  run: |
+    lake exe bench run --tag regression \
+      --total-seconds 60 \
+      --baseline baseline.json \
+      --export-file bench-out.json
+- name: Upload result
+  uses: actions/upload-artifact@v4
+  with:
+    name: bench-out
+    path: bench-out.json
+```
+
+The job is bounded predictably (~60s + one rung) and produces a
+machine-readable artifact downstream tools can diff. `--baseline`
+will still flag regressions among the benchmarks that did run; the
+`skipped` list in the export tells reviewers which benchmarks
+weren't covered this time.
+
+`--total-seconds` is only meaningful with `--tag` / `--filter`
+(suite mode). Running a single named benchmark with
+`--total-seconds` is supported but typically overkill — the
+per-benchmark `--max-seconds-per-call` already bounds individual
+calls.
+
 ## Configuring a benchmark
 
 `BenchmarkConfig` carries the knobs the harness reads at run time:

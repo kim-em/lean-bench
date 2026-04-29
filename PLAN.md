@@ -104,15 +104,20 @@ emits a divergence report whose earliest-divergence block carries a
 visible string preview of each implementation's return value at
 that param, in addition to the hash.
 
-## F7. CI-budget mode
+## F7. CI-budget mode (shipped — issue #9)
 
-`--total-seconds 60` flag on the parent: schedule whole-suite runs
-inside a wallclock budget, dropping families that don't fit and
-tagging them with `status: "budget_skip"` in the report.
-
-Acceptance: running with `--total-seconds 5` against a suite that
-would naturally take 60s emits some completed families and some
-`budget_skip` rows; total wall ≤ 5s + per-spawn floor.
+Implemented as a `--total-seconds N` flag on `run`. The orchestrator
+schedules whole-suite runs against a monotonic-clock deadline:
+benchmarks that would start past the deadline are tagged
+`status: "budget_skip"` in both the terminal output and the export
+document; a benchmark whose ladder is cut short between rungs gets
+`budget_truncated: true` on its result. The bound on total wall time
+is approximately `total_seconds + maxSecondsPerCall` (at most one
+rung can be in flight when the deadline trips). See
+[`doc/quickstart.md#ci-budget-mode`](doc/quickstart.md#ci-budget-mode)
+for the user-facing guide and
+[`doc/schema.md#export-budget-summary`](doc/schema.md#export-budget-summary)
+for the export format.
 
 ## F8. `lake bench` Lake script
 
