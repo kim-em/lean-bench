@@ -372,6 +372,15 @@ declared with `.linear 32` keeps the declared `32`, since the flag
 only carries the schedule kind. Switching from `.auto` / `.doubling`
 to `.linear` via the CLI uses the macro-default 16 samples.
 
+`--param-floor` / `--param-ceiling` only steer the doubling and
+linear ladder generators; a benchmark registered with
+`paramSchedule := .custom #[…]` walks the declared array verbatim,
+so those flags would be inert. The harness logs a `note:` to stderr
+when this happens so the override doesn't appear to have been
+honoured (issue #46). Either edit the declared `.custom` array, or
+pass `--param-schedule doubling` (or `linear`) to switch the shape —
+floor/ceiling apply once the schedule is no longer `.custom`.
+
 `--cache-mode warm|cold` selects what is being measured. The default
 `warm` is the v0.1 design: the child auto-tunes an inner-repeat count
 and runs the function many times in a single spawn, so caches and
