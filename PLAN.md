@@ -8,17 +8,24 @@ verdict, and the `Fib` / `Sort` / `BinarySearch` examples.
 This file enumerates the post-v0.1 features. None are required for
 the library to be useful as-is. Order is rough priority.
 
-## F1. Auto-fit complexity
+## F1. Auto-fit complexity (shipped — issue #8)
 
-Allow `setup_benchmark fib n` (no `=>`); the library tries fitting a
-fixed catalogue
-`[1, n, n * Nat.log2 n, n^2, n^3, 2^n]`
-to the observed ratios and reports best fit. Useful when the user
-doesn't want to commit to a model up front; complements the existing
-"declare and verify" workflow.
+Implemented as a `--auto-fit` flag on `run` / `compare`. After the
+standard verdict block, the harness fits the fixed catalogue
+`[1, n, n * Nat.log2 (n + 1), n^2, n^3, 2^n]` against the observed
+per-call timings and prints a ranked suggestion (lowest stddev of
+`log C` wins). The declared-model verdict is unaffected — auto-fit
+is purely advisory. See
+[`doc/quickstart.md#auto-fit`](doc/quickstart.md#auto-fit) for the
+catalog, the scoring method, and limits.
 
-Acceptance: `lake exe fib_benchmark_example run goodFib --auto-fit` reports
-`best fit: n` for the linearised goodFib.
+The originally-proposed declaration-time form (`setup_benchmark fib n`
+with no `=>`) is dropped: a runtime flag matches the use case better
+(quickly probe a function whose model is unclear) without requiring
+the user to commit to a placeholder declaration. The acceptance
+example still works:
+`lake exe fib_benchmark_example run goodFib --auto-fit` reports `n`
+as the best fit.
 
 ## F3. Memory metrics
 

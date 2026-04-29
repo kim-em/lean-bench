@@ -252,6 +252,12 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   let baselinePath? := parsedFlag? p "baseline" String
   let threshold : Float :=
     (parsedFlag? p "regression-threshold" Float).getD 10.0
+  -- `--auto-fit` (issue #8) chooses which result formatter to use
+  -- for parametric results. The declared-model verdict is
+  -- unaffected — auto-fit is purely advisory.
+  let autoFit := p.hasFlag "auto-fit"
+  let fmtP (r : BenchmarkResult) : String :=
+    if autoFit then Format.fmtResultWithAutoFit r else Format.fmtResult r
   -- Explicit names: run each directly (existing behavior).
   if !nameStrs.isEmpty then
     let mut anyFail := false
@@ -262,7 +268,7 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
       match ← findRuntimeEntry name with
       | some _ =>
         let result ← LeanBench.runBenchmark name (configOverrideFromParsed p)
-        IO.println (Format.fmtResult result)
+        IO.println (fmtP result)
         pResults := pResults.push result
       | none =>
         match ← findFixedRuntimeEntry name with
@@ -299,7 +305,7 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
     unless first do IO.println ""
     first := false
     let result ← LeanBench.runBenchmark e.spec.name (configOverrideFromParsed p)
-    IO.println (Format.fmtResult result)
+    IO.println (fmtP result)
     pResults := pResults.push result
   for e in fFiltered do
     unless first do IO.println ""
@@ -349,7 +355,10 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
     unless isF do allFixed := false
   if allParametric then
     let report ← LeanBench.compare resolved (configOverrideFromParsed p)
-    IO.println (Format.fmtComparison report)
+    if p.hasFlag "auto-fit" then
+      IO.println (Format.fmtComparisonWithAutoFit report)
+    else
+      IO.println (Format.fmtComparison report)
     match exportPath? with
     | some ep =>
       let env? := report.results[0]?.bind (·.env?)
@@ -465,6 +474,7 @@ Each missing flag leaves the declared value untouched."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
+    "auto-fit";                      "Parametric only: after the verdict, fit a fixed catalog of complexity models (1, n, n*log n, n^2, n^3, 2^n) to the observed per-call timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
     baseline : String;               "Compare against a previous export FILE; report regressions and improvements. Exit code is non-zero when any regression exceeds the threshold."
@@ -513,6 +523,7 @@ explicit names are used."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
     "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
     "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
+    "auto-fit";                      "Parametric only: after each per-function verdict, fit a fixed catalog of complexity models to the observed timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
 

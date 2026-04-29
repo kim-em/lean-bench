@@ -1,4 +1,5 @@
 import LeanBench.Core
+import LeanBench.AutoFit
 import LeanBench.Env
 import LeanBench.RunEnv
 import LeanBench.Verify
@@ -354,6 +355,74 @@ private def fmtTags (tags : Array String) : String :=
   if tags.isEmpty then ""
   else "  [" ++ String.intercalate ", " tags.toList ++ "]"
 
+/-- Render the auto-fit suggestion block (issue #8). Pure function on
+    a pre-computed `AutoFit.Ranking`; the caller decides whether to
+    include it in the output (gated by the `--auto-fit` CLI flag).
+
+    Layout: a header making clear this is heuristic, then one line
+    per catalog entry sorted by `stdLogC` ascending. The winner gets
+    a `←` arrow only when the `Confidence` verdict is `decisive`;
+    on a `weak` verdict no arrow is printed and a hint line names
+    the reason (too few rungs, or runner-up too close). The score
+    is `stdLogC`, the standard deviation of `log C` across the
+    common rung set — directly comparable across catalog entries
+    because every model evaluates on the same rungs (see
+    `LeanBench.AutoFit`). -/
+def fmtAutoFit (ranking : AutoFit.Ranking) : Array String := Id.run do
+  let fits := ranking.fits
+  match ranking.confidence with
+  | .none =>
+    return #[
+      "  auto-fit (heuristic; not a proof):",
+      "    no candidates fit — fewer than 2 verdict-eligible rungs survived"]
+  | _ =>
+    let labelWidth := fits.foldl (fun m f => max m f.model.label.length) 0
+    let scores := fits.map (·.stdLogC)
+    let scoreStrs := scores.map fmtFloat3
+    let scoreWidth := scoreStrs.foldl (fun m s => max m s.length) 0
+    let cStrs := fits.map (fun f => fmtFloat3 f.meanC)
+    let cWidth := cStrs.foldl (fun m s => max m s.length) 0
+    let mut lines : Array String :=
+      #["  auto-fit (heuristic; not a proof — ranks the catalog by stddev of log C):"]
+    let header :=
+      "    " ++ rightpad "model" labelWidth ++
+      "  "  ++ rightpad "stdLogC" scoreWidth ++
+      "  "  ++ rightpad "mean C" cWidth ++
+      "  "  ++ "n"
+    lines := lines.push header
+    let isDecisive := match ranking.confidence with
+      | .decisive => true
+      | _ => false
+    for i in [0 : fits.size] do
+      let f := fits[i]!
+      let tag : String := if i == 0 && isDecisive then "  ←" else ""
+      lines := lines.push <|
+        "    " ++ rightpad f.model.label labelWidth ++
+        "  "  ++ rightpad scoreStrs[i]! scoreWidth ++
+        "  "  ++ rightpad cStrs[i]! cWidth ++
+        "  "  ++ toString f.okPoints ++ tag
+    -- For a `weak` verdict surface the actual reason so the user
+    -- knows whether to widen the ladder, raise `--param-ceiling`, or
+    -- tolerate the ambiguity. The `decisive` branch needs no extra
+    -- prose — the arrow speaks for itself.
+    match ranking.confidence with
+    | .weak reason =>
+      lines := lines.push s!"    ‼ inconclusive: {reason}"
+    | _ => pure ()
+    return lines
+
+/-- Append an auto-fit suggestion block to a `BenchmarkResult` report.
+    Calling site: the `run` subcommand handler when `--auto-fit` is
+    set. The block is emitted *after* the verdict line so the user
+    sees their declared model's verdict first, then the heuristic
+    suggestion. Issue #8. -/
+def fmtResultWithAutoFit (r : BenchmarkResult) : String :=
+  let baseReport := fmtResult r
+  let ranking := AutoFit.rank (AutoFit.samplesFromResult r)
+  let extraLines := fmtAutoFit ranking
+  if extraLines.isEmpty then baseReport
+  else baseReport ++ "\n" ++ "\n".intercalate extraLines.toList
+
 /-- One-line summary of a registered benchmark, used by `list`. -/
 def fmtSpec (spec : BenchmarkSpec) : String :=
   let h := if spec.hashable then "" else "  (no Hashable)"
@@ -608,6 +677,20 @@ def fmtComparison (rep : ComparisonReport) : String := Id.run do
     lines := lines.push
       "  (only result hashes are available; see doc/quickstart.md for what to expect)"
   return "\n".intercalate lines.toList
+
+/-- Like `fmtComparison`, but appends a per-function auto-fit
+    suggestion block before the final agreement summary. Issue #8. -/
+def fmtComparisonWithAutoFit (rep : ComparisonReport) : String := Id.run do
+  let base := fmtComparison rep
+  let mut blocks : Array String := #[]
+  for r in rep.results do
+    let ranking := AutoFit.rank (AutoFit.samplesFromResult r)
+    let extra := fmtAutoFit ranking
+    if extra.isEmpty then continue
+    blocks := blocks.push <|
+      s!"auto-fit for {r.function}:\n" ++ "\n".intercalate extra.toList
+  if blocks.isEmpty then return base
+  return base ++ "\n\n" ++ "\n\n".intercalate blocks.toList
 
 end Format
 end LeanBench

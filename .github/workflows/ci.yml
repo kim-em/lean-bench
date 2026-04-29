@@ -77,6 +77,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/export_benchmark_test
 
+      - name: auto-fit catalog test (issue #8: heuristic model selection)
+        shell: bash
+        run: ./.lake/build/bin/auto_fit_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's
@@ -110,6 +114,29 @@ jobs:
             --param-ceiling 256 \
             --param-schedule doubling \
             --slope-tolerance 0.5
+
+      # End-to-end smoke test for issue #8: --auto-fit must execute
+      # against a real benchmark, exit cleanly, and append the
+      # heuristic block. The unit-test exe (auto_fit_benchmark_test)
+      # pins the ranking logic on synthetic data; this step just
+      # validates the flag plumbing across the spawn pipeline. We
+      # don't assert the winner row because CI runner spawn-floor
+      # noise (especially Windows / macOS) can drag enough rungs
+      # below the signal floor that no model lands a verdict-eligible
+      # rung — that's a measurement edge case, not a regression in
+      # the auto-fit code.
+      - name: fib example run with --auto-fit
+        shell: bash
+        run: |
+          out=$(./.lake/build/bin/fib_benchmark_example run \
+            LeanBench.Examples.Fib.goodFib \
+            --max-seconds-per-call 0.5 \
+            --param-ceiling 1024 \
+            --slope-tolerance 0.5 \
+            --auto-fit)
+          echo "$out"
+          echo "$out" | grep -q "auto-fit (heuristic" \
+            || { echo "missing auto-fit header"; exit 1; }
 
       - name: sort example list & verify
         shell: bash
