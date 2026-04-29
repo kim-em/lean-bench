@@ -8,6 +8,7 @@ import LeanBench.Compare
 import LeanBench.Verify
 import LeanBench.Format
 import LeanBench.Export
+import LeanBench.Profile
 
 /-!
 # `LeanBench.Cli` — argv dispatcher
@@ -23,6 +24,7 @@ runner). Subcommand layout:
 | `./bench run NAME [override flags]`                             | parent: run one or more benchmarks, print report |
 | `./bench compare A B C [override flags]`                        | parent: comparison report |
 | `./bench verify [NAMES…]`                                        | parent: bounded `f 0` / `f 1` sanity check via children |
+| `./bench profile NAME --profiler "STR" [--param N]`              | parent: re-spawn child wrapped under user's profiler (issue #13) |
 | `./bench _child --bench NAME --param N --target-nanos T`        | child: one inner-tuned batch, print one JSONL row, exit |
 
 `run` and `compare` accept run-time `BenchmarkConfig` overrides via
@@ -380,6 +382,33 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
   IO.eprintln "compare: cannot mix parametric and fixed benchmarks; or one or more names are unregistered"
   return 1
 
+/-- Dispatch `profile NAME --profiler "perf stat --"`: re-invokes
+    this same binary in `_child` mode at a single param, but with the
+    user's profiler command in front. See `LeanBench.Profile.runProfile`
+    for the full contract. -/
+def runProfileCmd (p : Cli.Parsed) : IO UInt32 := do
+  let nameStr := (p.positionalArg! "name").as! String
+  let name := nameStr.toName
+  let profilerCmd := (p.flag! "profiler").as! String
+  let param : Nat := (parsedFlag? p "param" Nat).getD 0
+  if (LeanBench.profileTokens profilerCmd).isEmpty then
+    IO.eprintln "profile: --profiler must be a non-empty command (e.g. \"perf stat --\")"
+    return 1
+  match ← findRuntimeEntry name with
+  | none =>
+    -- Fixed benchmarks aren't profiled through this entry point yet —
+    -- the param-less single-shot case is the easier one to add later.
+    -- For now, point the user at the parametric registry explicitly.
+    match ← findFixedRuntimeEntry name with
+    | some _ =>
+      IO.eprintln s!"profile: {name} is a fixed benchmark; profiling for fixed benchmarks is not yet supported (issue #13)"
+      return 1
+    | none =>
+      IO.eprintln s!"profile: unregistered benchmark: {name}"
+      return 1
+  | some _ =>
+    LeanBench.runProfile name param profilerCmd (configOverrideFromParsed p)
+
 def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
   let nameStrs := p.variableArgsAs! String |>.toList
   let (tagFilter, nameFilter) := parseFilters p
@@ -531,6 +560,40 @@ explicit names are used."
     ...names : String;     "Two or more benchmark names (variadic). Or use --tag/--filter to select."
 ]
 
+def profileSub : Cmd := `[Cli|
+  profile VIA runProfileCmd; ["0.1.0"]
+  "Run a single benchmark invocation under an external profiler.
+
+The harness re-spawns itself in child mode at one param, but with the
+user-supplied --profiler command prefixed in front. The profiler's
+output (perf record's perf.data, perf stat's summary, samply's
+server URL, time -v's resource usage, …) lands directly on the user's
+terminal alongside the child's JSONL row.
+
+Single-shot by design: profile one param at a time. No ladder, no
+verdict, no kill-on-cap (profilers can be slow to flush their own
+output). The benchmark's declared cacheMode is honoured — pin
+`--cache-mode cold` for one-shot first-touch profiling, leave it at
+`warm` (default) so the autotuner exercises the function many times
+inside one profiler invocation. See doc/profiling.md for end-to-end
+workflows with perf, samply, heaptrack, and time -v.
+
+Linux-first: --profiler is opaque, so any tool the user has on PATH
+works, but the canned workflows in doc/profiling.md focus on perf
+and samply on Linux. macOS users have Instruments and dtrace; Windows
+users have ETW. The harness side is platform-neutral."
+
+  FLAGS:
+    profiler : String;               "Required. Profiler command prefix to wrap the child invocation (e.g. \"perf stat --\", \"perf record -F 99 -g --\", \"samply record --\", \"/usr/bin/time -v\"). Whitespace-split into argv tokens; no shell quoting."
+    param : Nat;                     "Param value to invoke the function with. Default 0."
+    "max-seconds-per-call" : Float;  "Override the declared per-batch cap (seconds). Note: there is no kill-on-cap in profile mode; this only flows through to the child's reporting."
+    "target-inner-nanos" : Nat;      "Override the auto-tuner target wall-time per batch (ns). In warm mode (default) this controls how many iterations run inside one profiler invocation."
+    "cache-mode" : LeanBench.CacheMode;  "warm (default — autotuned, many calls per profiler invocation) or cold (one untuned call per spawn)."
+
+  ARGS:
+    name : String;     "Benchmark name (as registered)."
+]
+
 def verifySub : Cmd := `[Cli|
   verify VIA runVerifyCmd; ["0.1.0"]
   "Sanity-check registered benchmarks (f 0, f 1 via the child path). Verifies all benchmarks if no names or filters are given. Exit code is non-zero on any failure."
@@ -553,6 +616,7 @@ def topCmd : Cmd := `[Cli|
     runSub;
     compareSub;
     verifySub;
+    profileSub;
     childSub
 ]
 

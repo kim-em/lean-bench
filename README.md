@@ -93,8 +93,10 @@ name = "my_benchmarks"
 root = "MyBenchmarks"
 ```
 
-Then `lake exe my_benchmarks list / run NAME / compare A B / verify …`.
-See [doc/quickstart.md](doc/quickstart.md).
+Then `lake exe my_benchmarks list / run NAME / compare A B / verify /
+profile NAME --profiler "perf record -g --"`.
+See [doc/quickstart.md](doc/quickstart.md) and
+[doc/profiling.md](doc/profiling.md).
 
 ## Fixed-problem benchmarks
 
@@ -120,8 +122,10 @@ supports (Linux, macOS, Windows). See [PLAN.md](PLAN.md) for the
 v0.2+ roadmap, [doc/quickstart.md](doc/quickstart.md) for the
 user guide, [doc/pitfalls.md](doc/pitfalls.md) for Lean-specific
 benchmarking pitfalls (bignum `Nat`, forcing evaluation, sharing,
-warm vs. cold), and [doc/schema.md](doc/schema.md) for the JSONL
-result-row schema and its evolution rules.
+warm vs. cold), [doc/profiling.md](doc/profiling.md) for the
+external-profiler integration (`perf`, `samply`, `heaptrack`,
+`/usr/bin/time -v`), and [doc/schema.md](doc/schema.md) for the
+JSONL result-row schema and its evolution rules.
 
 ## Design
 

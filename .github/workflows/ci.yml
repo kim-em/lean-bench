@@ -81,6 +81,10 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/auto_fit_benchmark_test
 
+      - name: profile-mode test (issue #13: external profiler hooks)
+        shell: bash
+        run: ./.lake/build/bin/profile_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` spawns each registered benchmark's
       # child path against `f 0` / `f 1` and is bounded by the spec's
