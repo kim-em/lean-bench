@@ -30,11 +30,10 @@ The elaborator does only **static** checks at registration time:
 
 It auto-generates the complexity function, the specialised loop runner,
 the per-benchmark config def, and a single `register` call.
-There is intentionally **no** elaboration-time subprocess spawning;
-Codex review identified that as the worst design choice in the
-original draft (circular and phase-dependent). Compiled-code sanity
-checks live in `lean-bench verify` (a CLI subcommand) — see
-[`LeanBench.Verify`](Verify.lean).
+There is intentionally **no** elaboration-time subprocess spawning:
+making the elaborator depend on the compiled binary is circular and
+phase-dependent. Compiled-code sanity checks live in `lean-bench
+verify` (a CLI subcommand) — see [`LeanBench.Verify`](Verify.lean).
 
 ## `where { ... }` overrides
 

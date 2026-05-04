@@ -350,10 +350,9 @@ private def pickLinearRungs (lastOk firstFail samples : Nat) : Array Nat :=
 
     Always runs all `trials` spawns regardless of intermediate
     failures: a transient first-trial timeout shouldn't poison the
-    whole rung's data (Codex flagged this as a stability regression
-    when `outerTrials > 1`). The ladder-continuation decision is
-    made by the caller from `rung.any (·.status == .ok)`, so a
-    rung whose first trial flaked but later trials succeeded is
+    whole rung's data when `outerTrials > 1`. The ladder-continuation
+    decision is made by the caller from `rung.any (·.status == .ok)`,
+    so a rung whose first trial flaked but later trials succeeded is
     still treated as `lastOk`-eligible.
 
     Cost is bounded: each spawn is independently capped by
@@ -388,9 +387,9 @@ productive band — its rows get `partOfVerdict := false` later and
 never enter the verdict reduction. So the probe runs **one trial per
 rung** regardless of `outerTrials`: there is no statistical value in
 spending `outerTrials × probeRungs` spawns on rows the verdict will
-discard. Codex flagged this as wasted cost for `--outer-trials 5
---param-schedule linear`. The verdict-eligible sweep rungs (added
-later by `runBenchmark`) still run the full `outerTrials` cluster.
+discard — wasted cost for `--outer-trials 5 --param-schedule linear`.
+The verdict-eligible sweep rungs (added later by `runBenchmark`) still
+run the full `outerTrials` cluster.
 
 In `.doubling` mode every probe rung also enters the verdict, so
 running `outerTrials` per rung does matter — but we still only do
@@ -608,8 +607,8 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
       let rung ← runRungTrials spec n cfg.outerTrials (some env)
       points := points ++ rung
       -- Stop the ladder only when EVERY trial at this rung failed.
-      -- A transient first-trial timeout no longer poisons the rest
-      -- of the schedule (Codex review).
+      -- A transient first-trial timeout doesn't poison the rest of
+      -- the schedule.
       unless rungAnyOk rung do break
   | _ =>
     let (probePoints, lastOk?, firstFail?, probeBudgetCut) ←

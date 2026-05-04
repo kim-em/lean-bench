@@ -17,10 +17,9 @@ doubling ladder (per-function param schedules; each stops at its own
   hashes are checked at every common param; report `allAgreed` /
   `divergedAt` / `hashUnavailable`
 
-This satisfies the user's stated preference (per-function ladders so
-each function runs as far as it can) while preserving Codex's
-apples-to-apples summary suggestion (common subset for the agreement
-check and any future ratio summary stats).
+Per-function ladders let each function run as far as it can; the
+common subset is used for the agreement check (and any future ratio
+summary stats) so the summary stays apples-to-apples.
 -/
 
 open Lean

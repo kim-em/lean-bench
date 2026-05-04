@@ -23,13 +23,11 @@ namespace Stats
     calling and skip the param entirely if no usable data exists.
 
     Standard textbook median: odd `size` → middle element; even
-    `size` → mean of the two middle elements. Codex flagged the
-    earlier upper-middle variant as a systematic upward bias when
-    `okCount` happens to be even (a real possibility once failures
-    or floor-filtering knock trials out of the cluster). Mean-of-
-    middles is unbiased under any symmetric noise distribution and
-    matches what users expect when they read "median" in the
-    report. -/
+    `size` → mean of the two middle elements. The upper-middle
+    variant biases up when `okCount` is even — a real possibility
+    once failures or floor-filtering knock trials out of the
+    cluster. Mean-of-middles is unbiased under any symmetric noise
+    distribution. -/
 def medianFloat (xs : Array Float) : Float :=
   if xs.isEmpty then 0.0
   else

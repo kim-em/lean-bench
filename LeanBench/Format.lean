@@ -221,9 +221,8 @@ private def fmtAdvisory (r : BenchmarkResult) : Advisory → String
   | .truncatedAtCap p =>
     -- Phrased order-agnostically: "later rungs were skipped" works
     -- for the doubling/linear ladders (ascending) and for `.custom`
-    -- (whatever order the user listed). Codex flagged that
-    -- "no rungs above this point" was misleading for sparse / non-
-    -- monotone custom ladders.
+    -- (whatever order the user listed). "No rungs above this point"
+    -- would be misleading for sparse / non-monotone custom ladders.
     s!"  ‼ ladder stopped at param={p} after hitting the wallclock cap (`maxSecondsPerCall = {fmtFloat3 r.config.maxSecondsPerCall}s`); subsequent rungs in the schedule were skipped. Raise the cap if you need to reach further{orCustomScheduleTail r}."
   | .tooFewVerdictRows kept =>
     s!"  ‼ only {kept} verdict-eligible row(s) survived warmup-trim + signal-floor filter; the verdict is below resolution. Lower `--warmup-fraction`, {raiseCeilingHint r}{orCustomScheduleTail r}."

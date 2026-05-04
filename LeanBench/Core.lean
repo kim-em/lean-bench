@@ -444,9 +444,8 @@ def BenchmarkConfig.validate (c : BenchmarkConfig) : Except String Unit := do
   -- Duplicate params are also rejected: the formatter keys the `C`
   -- column and the warmup-trim dagger by `param`, so two rows with
   -- the same param would render with the same `C` (and either both
-  -- or neither carry the dagger). That makes the report misleading
-  -- even when the underlying measurements are fine. Codex flagged
-  -- this in the issue #15 review.
+  -- or neither carry the dagger), making the report misleading even
+  -- when the underlying measurements are fine.
   match c.paramSchedule with
   | .custom ps =>
     unless ps.size > 0 do
