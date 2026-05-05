@@ -171,32 +171,26 @@ def classifyChildOutcome
     | other =>
       synthRow param (.error (withStderr s!"child exited with code {other}"))
 
-/-- Spawn one child invocation and return the resulting DataPoint.
+/-- Outcome of a kill-on-cap-protected child spawn:
+    `(exit, stdout, stderrText, wasKilled)`. -/
+abbrev SpawnOutcome := UInt32 × String × String × Bool
 
-    The `env?` argument is the parent's pre-captured environment
-    snapshot (issue #11); when `some`, it's serialized via
-    `--env-json` so the child stamps the same env on its row instead
-    of re-shelling-out to `git` / `hostname` / `/proc/cpuinfo` per
-    rung. When `none`, the child captures fresh — used by helper
-    paths (`measureSpawnFloor`, `verifyOne`) where threading env
-    through isn't worth the plumbing. -/
-def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none) :
-    IO DataPoint := do
-  let exe ← ownExe
-  let target := spec.config.targetInnerNanos
-  let deadlineMs : UInt32 :=
-    (spec.config.maxSecondsPerCall * 1000.0 + spec.config.killGraceMs.toFloat).toUInt32
-  let baseArgs : Array String := #[
-    "_child",
-    "--bench", spec.name.toString (escape := false),
-    "--param", toString param,
-    "--target-nanos", toString target,
-    "--cache-mode", spec.config.cacheMode.toJsonString
-  ]
-  let args : Array String :=
-    match env? with
-    | some env => baseArgs ++ #["--env-json", (RunEnv.toJson env).compress]
-    | none     => baseArgs
+/-- Append `--env-json <json>` to `args` when `env?` is `some`. -/
+private def withEnvArg (args : Array String) (env? : Option Env) : Array String :=
+  match env? with
+  | some env => args ++ #["--env-json", (RunEnv.toJson env).compress]
+  | none     => args
+
+/-- Spawn `exe args` and return after the child exits, killing it
+    if the run exceeds `deadlineMs`. Drains stderr concurrently so a
+    chatty child can't deadlock on a full pipe. The killer task and
+    the parent coordinate via a mutex + flags so we never call
+    `kill(2)` on a reaped pid (the kernel may have recycled it):
+    the parent sets `mainDoneRef` under the lock before `child.wait`,
+    and the killer only fires after re-reading `mainDoneRef` under
+    the same lock. Full design: doc/design.md. -/
+def spawnWithCap (exe : String) (args : Array String)
+    (deadlineMs : UInt32) : IO SpawnOutcome := do
   let child ← IO.Process.spawn {
     cmd := exe
     args := args
@@ -204,17 +198,7 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none)
     stderr := .piped
     stdin := .null
   }
-  -- Drain stderr concurrently so a chatty child can't fill the pipe
-  -- buffer and deadlock its own write — the parent would then
-  -- misreport the child as timing out / killed at cap. Whatever the
-  -- child wrote to stderr is appended to the synthesized error row
-  -- when the child exits non-zero.
   let stderrTask ← child.stderr.readToEnd.asTask
-  -- The parent must set `mainDoneRef := true` under the lock *before*
-  -- calling `child.wait`, so the killer can't fire `kill(2)` on a
-  -- reaped pid (which the kernel may have recycled). The killer polls
-  -- `mainDoneRef` while sleeping so it exits promptly when the child
-  -- finishes early. Full design: doc/design.md.
   let mainDoneRef ← IO.mkRef false
   let killedRef ← IO.mkRef false
   let mutex ← Std.BaseMutex.new
@@ -245,10 +229,31 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none)
     match stderrTask.get with
     | .ok s => s.trimAscii.toString
     | .error _ => ""
-  -- `killedRef := true` is committed before `Child.kill`, and
-  -- `child.wait` returns only after the kill takes effect, so reading
-  -- `killedRef` here needs no synchronization with the killer.
   let wasKilled ← killedRef.get
+  return (exit, stdout, stderrText, wasKilled)
+
+/-- Spawn one child invocation and return the resulting DataPoint.
+
+    The `env?` argument is the parent's pre-captured environment
+    snapshot (issue #11); when `some`, it's serialized via
+    `--env-json` so the child stamps the same env on its row instead
+    of re-shelling-out to `git` / `hostname` / `/proc/cpuinfo` per
+    rung. When `none`, the child captures fresh — used by helper
+    paths (`measureSpawnFloor`, `verifyOne`) where threading env
+    through isn't worth the plumbing. -/
+def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none) :
+    IO DataPoint := do
+  let exe ← ownExe
+  let deadlineMs : UInt32 :=
+    (spec.config.maxSecondsPerCall * 1000.0 + spec.config.killGraceMs.toFloat).toUInt32
+  let args := withEnvArg #[
+    "_child",
+    "--bench", spec.name.toString (escape := false),
+    "--param", toString param,
+    "--target-nanos", toString spec.config.targetInnerNanos,
+    "--cache-mode", spec.config.cacheMode.toJsonString
+  ] env?
+  let (exit, stdout, stderrText, wasKilled) ← spawnWithCap exe args deadlineMs
   return classifyChildOutcome param exit stdout stderrText wasKilled
 
 /-- Doubling ladder from floor through ceiling. -/
@@ -708,55 +713,13 @@ def runFixedOneBatch (spec : FixedSpec) (cfg : FixedBenchmarkConfig)
   let exe ← ownExe
   let deadlineMs : UInt32 :=
     (cfg.maxSecondsPerCall * 1000.0 + cfg.killGraceMs.toFloat).toUInt32
-  let baseArgs : Array String := #[
+  let args := withEnvArg #[
     "_child",
     "--bench", spec.name.toString (escape := false),
     "--fixed",
     "--repeat-index", toString repeatIndex
-  ]
-  let args : Array String :=
-    match env? with
-    | some env => baseArgs ++ #["--env-json", (RunEnv.toJson env).compress]
-    | none     => baseArgs
-  let child ← IO.Process.spawn {
-    cmd := exe
-    args := args
-    stdout := .piped
-    stderr := .piped
-    stdin := .null
-  }
-  let stderrTask ← child.stderr.readToEnd.asTask
-  let mainDoneRef ← IO.mkRef false
-  let killedRef ← IO.mkRef false
-  let mutex ← Std.BaseMutex.new
-  let _killer ← IO.asTask do
-    let pollMs : UInt32 := 25
-    let deadline : Nat := deadlineMs.toNat
-    let mut waited : Nat := 0
-    let mut bailed := false
-    while waited < deadline && !bailed do
-      if (← mainDoneRef.get) then
-        bailed := true
-      else
-        let step : Nat := min pollMs.toNat (deadline - waited)
-        IO.sleep step.toUInt32
-        waited := waited + step
-    unless bailed do
-      mutex.lock
-      unless (← mainDoneRef.get) do
-        killedRef.set true
-        (try child.kill catch _ => pure ())
-      mutex.unlock
-  let stdout ← child.stdout.readToEnd
-  mutex.lock
-  mainDoneRef.set true
-  mutex.unlock
-  let exit ← child.wait
-  let stderrText : String :=
-    match stderrTask.get with
-    | .ok s => s.trimAscii.toString
-    | .error _ => ""
-  let wasKilled ← killedRef.get
+  ] env?
+  let (exit, stdout, stderrText, wasKilled) ← spawnWithCap exe args deadlineMs
   return classifyFixedChildOutcome repeatIndex exit stdout stderrText wasKilled
 
 /-- Numeric median of a sorted `Array Nat`. Returns the upper of the
