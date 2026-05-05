@@ -89,11 +89,11 @@ private def parseHexU64 (s : String) : Option UInt64 := do
 
 Schema-compatibility contract (see [`doc/schema.md`](../../doc/schema.md)):
 
-- `schema_version > Schema.schemaVersion` is rejected with an
-  explicit error. A missing `schema_version` is tolerated for
-  back-compat and treated as v1.
-- Required fields (`param`, `inner_repeats`, `total_nanos`, `status`)
-  are still required; absence is a parse error.
+- `schema_version` outside `Schema.supportedVersions` is rejected
+  with an explicit error.
+- Required fields (`schema_version`, `kind`, `function`, `param`,
+  `inner_repeats`, `total_nanos`, `status`) must be present; absence
+  is a parse error.
 - Optional fields (`per_call_nanos`, `result_hash`, `error`) are
   tolerated when missing or `null`.
 - Unknown extra keys are ignored — that's the forward-compat lever
@@ -103,10 +103,8 @@ def parseChildRow (line : String) : Except String DataPoint := do
   let json ← Json.parse line
   Schema.checkVersion json
   Schema.checkKind Schema.kindParametric json
-  -- `function` is required by the schema. The parent already knows
-  -- what it dispatched, but external tooling reading raw JSONL needs
-  -- this as a sanity check, so the parser still requires its
-  -- presence.
+  -- `function` is required by the schema for external readers, even
+  -- though the parent already knows what it dispatched.
   let _ ← json.getObjValAs? String "function"
   let param ← json.getObjValAs? Nat "param"
   let innerRepeats ← json.getObjValAs? Nat "inner_repeats"
@@ -127,9 +125,8 @@ def parseChildRow (line : String) : Except String DataPoint := do
     | "error" =>
         .error ((json.getObjValAs? String "error").toOption.getD "")
     | _ => .error s!"unknown status: {statusStr}"
-  -- Memory metrics (issue #6) — both optional, both may be JSON `null`
-  -- on platforms that can't supply them. A type mismatch or an
-  -- explicit `null` collapses to `none`; absence likewise.
+  -- Memory metrics (issue #6): both optional. Type mismatch / `null` /
+  -- absence all collapse to `none`.
   let allocBytes : Option Nat :=
     match json.getObjValAs? Nat "alloc_bytes" with
     | .ok n => some n
@@ -189,10 +186,6 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none)
   let target := spec.config.targetInnerNanos
   let deadlineMs : UInt32 :=
     (spec.config.maxSecondsPerCall * 1000.0 + spec.config.killGraceMs.toFloat).toUInt32
-  -- The cache-mode flag is passed positionally (`--cache-mode warm` /
-  -- `cold`) so the child knows which timing strategy to use. The
-  -- existing `--target-nanos` is unused in cold mode but still passed
-  -- for parser symmetry.
   let baseArgs : Array String := #[
     "_child",
     "--bench", spec.name.toString (escape := false),
@@ -217,24 +210,11 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none)
   -- child wrote to stderr is appended to the synthesized error row
   -- when the child exits non-zero.
   let stderrTask ← child.stderr.readToEnd.asTask
-  -- Two flags + a mutex coordinate the parent and the killer task:
-  --
-  --   * `mainDoneRef` flips to `true` once the parent has finished
-  --     reading stdout and is about to call `child.wait` (which on
-  --     POSIX reaps the pid).
-  --   * `killedRef` flips to `true` iff the killer issued the kill.
-  --
-  -- The killer takes the lock, reads `mainDoneRef`, and only kills if
-  -- the parent hasn't reached the post-stdout point yet. The parent
-  -- takes the lock to set `mainDoneRef` *before* calling
-  -- `child.wait`. This ordering guarantees we never call `kill(2)` on
-  -- a pid that has already been reaped — a reaped pid can be reused
-  -- by the kernel, so signalling it would risk hitting an unrelated
-  -- process.
-  --
-  -- The killer polls `mainDoneRef` while sleeping so it terminates
-  -- quickly when the child finishes early; otherwise every batch
-  -- would block here for the full `deadlineMs`.
+  -- The parent must set `mainDoneRef := true` under the lock *before*
+  -- calling `child.wait`, so the killer can't fire `kill(2)` on a
+  -- reaped pid (which the kernel may have recycled). The killer polls
+  -- `mainDoneRef` while sleeping so it exits promptly when the child
+  -- finishes early. Full design: doc/design.md.
   let mainDoneRef ← IO.mkRef false
   let killedRef ← IO.mkRef false
   let mutex ← Std.BaseMutex.new
@@ -265,10 +245,9 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none)
     match stderrTask.get with
     | .ok s => s.trimAscii.toString
     | .error _ => ""
-  -- The killer writes `killedRef := true` *before* it calls `Child.kill`,
-  -- so by the time `child.wait` has returned (which can only happen
-  -- after the kill takes effect, in the kill case) the flag is already
-  -- committed. Hence we don't have to synchronize with the killer task.
+  -- `killedRef := true` is committed before `Child.kill`, and
+  -- `child.wait` returns only after the kill takes effect, so reading
+  -- `killedRef` here needs no synchronization with the killer.
   let wasKilled ← killedRef.get
   return classifyChildOutcome param exit stdout stderrText wasKilled
 
@@ -450,7 +429,6 @@ private def topUpDoublingTrials (spec : BenchmarkSpec) (env : Env)
     IO (Array DataPoint × Bool) := do
   let extraTrials := spec.config.outerTrials - 1
   if extraTrials == 0 then return (probePoints, false)
-  -- Distinct ok params in probe order.
   let mut seen : Std.HashSet Nat := {}
   let mut okParams : Array Nat := #[]
   for dp in probePoints do
@@ -583,19 +561,12 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
   warnInertParamOverrides name override cfg
-  -- Capture reproducibility metadata at *parent* run start (issue
-  -- #11). The same snapshot is propagated to every child via
-  -- `--env-json`, so all JSONL rows in this run stamp the *same*
-  -- env (timestamps, git_dirty, hostname all consistent across
-  -- rungs). Avoids ~3 subprocess spawns per ladder rung that the
-  -- child's fallback fresh-capture would do.
+  -- Capture env once at parent start and propagate to every child via
+  -- `--env-json` so all JSONL rows in this run stamp identical env.
+  -- Saves ~3 subprocess spawns per ladder rung (issue #11).
   let env ← RunEnv.capture
   let spec := { entry.spec with config := cfg }
   let schedule := resolveSchedule cfg entry.complexity
-  -- `.custom` skips the doubling probe entirely — we walk the
-  -- user-supplied params in order and stop when one hits the cap.
-  -- For all other schedules the probe runs first and then optionally
-  -- a linear bracket sweep is added.
   let mut points : Array DataPoint := #[]
   let mut budgetTruncated := false
   match schedule with
@@ -615,14 +586,12 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
       runDoublingProbe spec env deadline?
     points := probePoints
     if probeBudgetCut then budgetTruncated := true
-    -- Skip post-probe work when the probe was budget-truncated;
-    -- we already lack a complete bracket and additional spawns
-    -- would burn over-budget without improving the verdict.
+    -- Skip post-probe work when budget-truncated: bracket is already
+    -- incomplete, more spawns just burn over-budget.
     if budgetTruncated then pure () else
     match schedule with
     | .doubling =>
-      -- Probe rows ARE the verdict data here. Top up every successful
-      -- probe rung to `outerTrials` measurements (subject to budget).
+      -- Probe rows ARE the verdict data here; top up to `outerTrials`.
       let (topped, cut) ← topUpDoublingTrials spec env points deadline?
       points := topped
       if cut then budgetTruncated := true
@@ -631,10 +600,6 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
     | .linear samples =>
       match lastOk?, firstFail? with
       | some lastOk, some firstFail =>
-        -- The probe ran one trial per rung; for the bracket-tightening
-        -- extrapolation use that single perCallNanos directly. (No
-        -- median needed because there's no cluster yet — the cluster
-        -- is built later by the sweep.)
         let lastOkPerCall : Float :=
           (probePoints.findSome? fun dp =>
               if dp.param == lastOk && dp.status == .ok then
@@ -646,8 +611,8 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
             capNanos firstFail
         let rungs := pickLinearRungs lastOk effFirstFail samples
         if !rungs.isEmpty then
-          -- Probe rows are bracket-finding only; demote them so they
-          -- don't enter `cMin`/`cMax`/slope.
+          -- Probe rows are bracket-finding only; demote so they don't
+          -- enter `cMin`/`cMax`/slope.
           points := points.map ({ · with partOfVerdict := false })
           for n in rungs do
             if (← deadlineExceeded? deadline?) then
@@ -655,18 +620,15 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
               break
             let rung ← runRungTrials spec n cfg.outerTrials (some env)
             points := points ++ rung
-            -- Stop the sweep only when EVERY trial at this rung failed.
             unless rungAnyOk rung do break
       | _, _ =>
-        -- No bracket (doubling ran clean to ceiling, or first rung failed).
-        -- Fall back to doubling-only — top up trials so the verdict
-        -- cluster is the full configured size.
+        -- No bracket: top up the doubling rungs to the full cluster.
         let (topped, cut) ← topUpDoublingTrials spec env points deadline?
         points := topped
         if cut then budgetTruncated := true
   let spawnFloor ← measureSpawnFloor env
-  -- Annotate below-floor rows BEFORE summarising so the verdict
-  -- ratios and the advisory list see the same filtered view.
+  -- Annotate below-floor BEFORE summarising; verdict ratios and the
+  -- advisory list must see the same filtered view.
   let annotated :=
     annotateBelowSignalFloor cfg.signalFloorMultiplier spawnFloor points
   let summary := Stats.summarize spec entry.complexity annotated
@@ -841,10 +803,8 @@ def runFixedBenchmark (name : Lean.Name)
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
   let env ← RunEnv.capture
-  -- Warmup: fire-and-forget; we don't fail the run if warmup itself
-  -- fails, but we do propagate killed/error status so the user sees
-  -- it (recorded as repeatIndex = 0 in the warmup pass — but not
-  -- pushed into `points`).
+  -- Warmup is fire-and-forget: a failing warmup doesn't fail the run,
+  -- and its row is not pushed into `points`.
   if cfg.warmup then
     let _ ← runFixedOneBatch entry.spec cfg 0 (some env)
   let mut points : Array FixedDataPoint := #[]

@@ -319,13 +319,11 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   let baselinePath? := parsedFlag? p "baseline" String
   let threshold : Float :=
     (parsedFlag? p "regression-threshold" Float).getD 10.0
-  -- `--auto-fit` (issue #8) chooses which result formatter to use
-  -- for parametric results. The declared-model verdict is
-  -- unaffected — auto-fit is purely advisory.
+  -- `--auto-fit` (issue #8) is purely advisory; the declared-model
+  -- verdict is unchanged.
   let autoFit := p.hasFlag "auto-fit"
   let fmtP (r : BenchmarkResult) : String :=
     if autoFit then Format.fmtResultWithAutoFit r else Format.fmtResult r
-  -- Explicit names: run each directly (existing behavior).
   if !nameStrs.isEmpty then
     let mut anyFail := false
     let mut pResults : Array BenchmarkResult := #[]
@@ -354,7 +352,6 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
     let exportCode ← handleBaselineAndExport pResults fResults env?
       baselinePath? exportPath? threshold
     return exportCode
-  -- No explicit names: use filters.
   unless hasFilters tagFilter nameFilter do
     IO.eprintln "run: specify a benchmark name or use --tag/--filter to select benchmarks"
     return 1
@@ -365,10 +362,8 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   if pFiltered.isEmpty && fFiltered.isEmpty then
     IO.eprintln "run: no benchmarks match the given filters"
     return 1
-  -- Issue #9: optional CI-budget mode. When `--total-seconds` is set,
-  -- compute an absolute deadline and consult it before each benchmark
-  -- (and inside `runBenchmark` between rungs) so the suite stops
-  -- within a predictable bound.
+  -- CI-budget mode (issue #9): consult the deadline before each
+  -- benchmark and inside `runBenchmark` between rungs.
   let totalSecs? : Option Float := parsedFlag? p "total-seconds" Float
   match totalSecs? with
   | some s =>
@@ -378,10 +373,8 @@ def runRunCmd (p : Cli.Parsed) : IO UInt32 := do
   | none => pure ()
   let startMono ← IO.monoNanosNow
   let deadline? : Option Nat := totalSecs?.map fun s =>
-    -- `s ≥ 0` (validated above), so the conversion is well-defined.
-    -- A `0` budget produces a deadline equal to `startMono`, which
-    -- the first deadline check will see as exhausted, marking every
-    -- benchmark as a budget skip.
+    -- A `0` budget marks every benchmark as a budget skip on the
+    -- first deadline check.
     startMono + (s * 1.0e9).toUInt64.toNat
   let mut first := true
   let mut pResults : Array BenchmarkResult := #[]
@@ -481,8 +474,6 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
       Export.exportToFile ep report.results #[] env?
       IO.println s!"exported to {ep}"
     | none => pure ()
-    -- Issue #47: propagate the no-usable-data exit code if any
-    -- constituent run produced zero verdict-eligible rows.
     let noData := noUsableDataNames report.results
     unless noData.isEmpty do
       let names := String.intercalate ", " (noData.toList.map toString)
@@ -517,9 +508,7 @@ def runProfileCmd (p : Cli.Parsed) : IO UInt32 := do
     return 1
   match ← findRuntimeEntry name with
   | none =>
-    -- Fixed benchmarks aren't profiled through this entry point yet —
-    -- the param-less single-shot case is the easier one to add later.
-    -- For now, point the user at the parametric registry explicitly.
+    -- Fixed-benchmark profiling is not wired up yet — issue #13.
     match ← findFixedRuntimeEntry name with
     | some _ =>
       IO.eprintln s!"profile: {name} is a fixed benchmark; profiling for fixed benchmarks is not yet supported (issue #13)"
@@ -545,9 +534,8 @@ def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
       let fNames := fFiltered.map (·.spec.name) |>.toList
       pure (pNames ++ fNames)
     else pure []
-  -- `verify []` means "all" (existing behavior). `verify --tag x`
-  -- that matches nothing still calls `verify []` which verifies all,
-  -- so check for that edge case.
+  -- `verify []` means "all"; guard against `--tag x` matching nothing
+  -- (which would otherwise silently verify everything).
   if hasFilters tagFilter nameFilter && names.isEmpty then
     IO.eprintln "verify: no benchmarks match the given filters"
     return 1
@@ -745,7 +733,6 @@ def topCmd : Cmd := `[Cli|
 ]
 
 def dispatch (args : List String) : IO UInt32 :=
-  -- Default subcommand when invoked with no args: `list`.
   let argv := if args.isEmpty then ["list"] else args
   topCmd.validate argv
 

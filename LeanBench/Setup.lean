@@ -146,15 +146,12 @@ where
     let env ← getEnv
     let ns ← getCurrNamespace
     let fnName := resolveDecl env ns fnId
-    -- Validate types, branching on whether a prep clause was given.
-    -- `resTy` is the function's return type α (used for Hashable lookup).
+    -- `resTy` is α (used below for Hashable lookup). With prep:
+    -- require `prep : Nat → σ` and `fn : σ → α`.
     let resTy ← match prepId? with
       | none =>
-        -- No prep: fn must be `Nat → α`.
         expectNatToAlpha env fnName
       | some prepStx =>
-        -- With prep: `prep : Nat → σ` and `fn : σ → α`. Check the
-        -- types line up.
         let prepName := resolveDecl env ns prepStx
         let σ ← expectNatToAlpha env prepName
         let (fnArgTy, fnResTy) ← expectFunction env fnName
@@ -163,40 +160,28 @@ where
           throwError "setup_benchmark: function `{fnName}` takes argument of type `{fnArgTy}`, but prep `{prepName}` returns `{σ}`"
         pure fnResTy
     let isHashable ← hasHashable resTy
-    -- Pull out the optional `where TERM` clause. The TERM is whatever
-    -- the user wrote after `where`; we feed it to the generated config
-    -- def below where it gets elaborated against `BenchmarkConfig`.
     let configTerm? : Option Term ← match whereClause? with
       | none => pure none
       | some w => match w with
         | `(setupBenchmarkWhere| where $t:term) => pure (some t)
         | _ => throwErrorAt w "setup_benchmark: malformed `where` clause"
-    -- Names of the auto-generated helpers.
     let cName := fnName.str "_leanBench_complexity"
     let rName := fnName.str "_leanBench_runChecked"
     let cfgDeclName := fnName.str "_leanBench_config"
     let cIdent := mkIdent cName
     let rIdent := mkIdent rName
     let cfgIdent := mkIdent cfgDeclName
-    -- (1) auto-def the complexity function.
     elabCommand <| ← `(command|
       def $cIdent : Nat → Nat := fun $argId => $complexityTerm)
-    -- (2) auto-def the specialised loop runner. The loop body lives
-    -- in this generated def so the Lean compiler can inline the
-    -- function under test directly into it (no closure indirection,
-    -- no per-iteration Hashable / Option wrap on the hot path).
+    -- The loop body is in a generated def so the compiler can inline
+    -- the function under test (no closure indirection, no per-iteration
+    -- Hashable / Option wrap on the hot path).
     --
-    -- The runner is two-stage: it takes `param`, runs prep (if any),
-    -- forces the prep value via `blackBox (Hashable.hash s)` so its
-    -- cost stays out of the timed loop, and returns a closure
-    -- `count → IO (loopNanos × hash)`. `IO.monoNanosNow` brackets
-    -- only the inner `for` loop. The closure captures the prep
-    -- result, so prep runs once per child-process spawn, not once
-    -- per autotuner probe.
-    --
-    -- For the no-prep path, the input (`param : Nat`) is already
-    -- strict and there is nothing to force; the runner is just
-    -- `pure (fun count => …)`.
+    -- The runner is two-stage: take `param`, run prep (if any), force
+    -- the prep value via `blackBox` so its cost stays out of the timed
+    -- loop, and return a closure `count → IO (loopNanos × hash)`. The
+    -- closure captures the prep result, so prep runs once per child-
+    -- process spawn rather than once per autotuner probe.
     let mkRunner : CommandElabM (TSyntax `command) := match prepId? with
       | none =>
         if isHashable then
@@ -255,10 +240,6 @@ where
                 let t₁ ← IO.monoNanosNow
                 return (t₁ - t₀, none))
     elabCommand (← mkRunner)
-    -- (3) auto-def the per-benchmark config. Default `{}` when no
-    -- `where` clause was supplied; otherwise elaborate the user's
-    -- term against `BenchmarkConfig` (so omitted fields keep their
-    -- defaults via Lean's structure-literal behaviour).
     match configTerm? with
     | none =>
       elabCommand <| ← `(command|
@@ -266,13 +247,11 @@ where
     | some t =>
       elabCommand <| ← `(command|
         def $cfgIdent : LeanBench.BenchmarkConfig := $t)
-    -- (4) emit an `initialize` block that puts the runtime closure
-    --     into the IO.Ref registry. We `quote` the `Name`s so the
-    --     runtime registry key is a properly hierarchical `Name` —
-    --     `Name.mkSimple "a.b.c"` would instead produce an atomic name
-    --     whose `toString` wraps it in guillemets.
-    -- `reprint` preserves trailing whitespace from the source, which
-    -- would turn the `list` output into a spaced-out blank-line mess.
+    -- `quote` the `Name`s so the runtime registry key stays
+    -- hierarchical; `Name.mkSimple "a.b.c"` would produce an atomic
+    -- name whose `toString` wraps it in guillemets.
+    -- `reprint` preserves trailing whitespace from source, which
+    -- would turn `list` output into spaced-out blank lines.
     let formulaStr :=
       (complexityTerm.raw.reprint.getD (toString complexityTerm.raw)).trimAscii.toString
     let formulaLit := Syntax.mkStrLit formulaStr
@@ -293,16 +272,10 @@ where
             config := $cfgIdent }
           $rIdent
           $cIdent)
-    -- (5) update the persistent env extension at elaboration time.
-    --     The runtime registry (populated by the `initialize` block
-    --     above) holds the elaborated `BenchmarkConfig` value; here we
-    --     store the *default* `config` field plus a `configDeclName`
-    --     pointing at the auto-generated def. Compile-time tooling
-    --     that wants the actual override-bearing config must look up
-    --     `env.find? spec.configDeclName` rather than reading
-    --     `spec.config`. The split keeps the persistent extension free
-    --     of unsafe elaboration-time evaluation while still giving
-    --     downstream tooling a stable handle on the declared config.
+    -- The persistent extension stores `config := {}` plus a
+    -- `configDeclName`; compile-time tooling resolves the auto-
+    -- generated def to recover the actual declared config. Keeps the
+    -- persistent extension free of unsafe elaboration-time evaluation.
     let spec : BenchmarkSpec :=
       { name := fnName
         complexityName := cName
@@ -350,13 +323,9 @@ def expectFixedValue (env : Environment) (declName : Name) :
   let some ci := env.find? declName
     | throwError "setup_fixed_benchmark: name `{declName}` is not defined"
   let ty := ci.type
-  -- Function-arrow types are rejected up front — they are a category
-  -- error for `setup_fixed_benchmark` (use the parametric form).
   if ty.isForall then
     throwError "setup_fixed_benchmark: name `{declName}` must be a value or `IO α`; got function type `{ty}`"
   liftTermElabM do
-    -- Try to unify against `IO ?α`. If that succeeds, the value is an
-    -- IO action; the unifier instantiates `?α` to the element type.
     let α ← Meta.mkFreshExprMVar (mkSort Level.one)
     let ioα ← Meta.mkAppM ``IO #[α]
     if (← Meta.isDefEq ty ioα) then
@@ -393,11 +362,9 @@ where
     let cfgDeclName := fnName.str "_leanBench_fixedConfig"
     let rIdent := mkIdent rName
     let cfgIdent := mkIdent cfgDeclName
-    -- Auto-def the runner. Four shapes from the cross-product of
-    -- `(isIO, isHashable)`. All bracket the timer around exactly one
-    -- invocation of the registered value; the result is forced via
-    -- `blackBox` to defeat dead-code elimination, just like the
-    -- parametric path.
+    -- Four shapes from `(isIO, isHashable)`. All bracket the timer
+    -- around one invocation; the result is forced via `blackBox` to
+    -- defeat dead-code elimination, like the parametric path.
     let mkRunner : CommandElabM (TSyntax `command) :=
       match isIO, isHashable with
       | true, true =>
@@ -435,7 +402,6 @@ where
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, none))
     elabCommand (← mkRunner)
-    -- Per-benchmark config def, like the parametric path.
     match configTerm? with
     | none =>
       elabCommand <| ← `(command|
@@ -456,15 +422,9 @@ where
             hashable := $isHashableSyn
             config := $cfgIdent }
           $rIdent)
-    -- Persistent extension stores `config := {}` as a placeholder; the
-    -- authoritative declared-config value is the auto-generated def
-    -- pointed at by `configDeclName`. This mirrors the parametric
-    -- convention (see `BenchmarkSpec` registration above): keeping the
-    -- persistent extension free of unsafe elaboration-time evaluation
-    -- while still giving downstream tooling a stable handle on the
-    -- declared overrides via `env.find? spec.configDeclName`. The
-    -- runtime registry holds the elaborated `FixedBenchmarkConfig`
-    -- value directly.
+    -- Mirrors the parametric convention: persistent extension stores
+    -- `config := {}` plus `configDeclName`; runtime registry holds
+    -- the elaborated `FixedBenchmarkConfig` value.
     let spec : FixedSpec :=
       { name := fnName
         runnerName := rName

@@ -136,12 +136,9 @@ def emitRow
     (cacheMode : CacheMode := .warm)
     (errorMsg? : Option String := none) :
     IO Unit := do
-  -- Synthesized error / "unregistered benchmark" rows pass
-  -- `innerRepeats := 0`, which would naively render as `0/0 = NaN`.
-  -- `NaN` is not valid JSON (`Lean.Json.parse` rejects it), so we
-  -- emit `null` for the derived field and leave the consumer to
-  -- treat absence as `null` per the schema contract. Real
-  -- measurement rows always have `innerRepeats ≥ 1`.
+  -- Synthesized error rows pass `innerRepeats := 0`. `0/0 = NaN` isn't
+  -- valid JSON, so emit `null` for the derived field; real measurement
+  -- rows always have `innerRepeats ≥ 1`.
   let perCallStr : String :=
     if innerRepeats == 0 then "null"
     else toString (totalNanos.toFloat / innerRepeats.toFloat)
@@ -188,13 +185,10 @@ def emitRow
     differ. -/
 def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
     (cacheMode : CacheMode := .warm) (env? : Option Env := none) : IO UInt32 := do
-  -- Capture env *before* dispatching: we want a row even for the
-  -- "unregistered benchmark" failure case, and that row needs an
-  -- `env` field per the schema contract. When the parent passed
-  -- `--env-json`, we use that snapshot instead — it keeps every
-  -- row in a single run stamped with identical env (consistent
-  -- timestamps, hostname, git_dirty), and skips ~3 subprocess
-  -- spawns per ladder rung.
+  -- Capture env *before* dispatching so the "unregistered benchmark"
+  -- failure row still carries the schema-required `env` field.
+  -- Parent-provided `--env-json` is preferred: keeps every row in a
+  -- run stamped with identical env, saves ~3 subprocess spawns/rung.
   let env ← match env? with
     | some env => pure env
     | none     => RunEnv.capture
@@ -211,19 +205,12 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
       let (count, total, hash) ← match cacheMode with
         | .warm => autoTune loop targetNanos
         | .cold =>
-          -- Single, untuned invocation. The closure does its own
-          -- internal timing around the inner loop body, just like the
-          -- warm path, so spawn / startup costs are excluded by the
-          -- same mechanism. We don't pay an extra warmup probe — the
-          -- whole point of cold is "this is the first call after a
-          -- fresh process".
+          -- Single untuned invocation; no warmup probe. The closure's
+          -- internal timing still excludes spawn/startup costs.
           let (t, h) ← loop 1
           pure (1, t, h)
-      -- Capture memory metrics *after* the measured work but *before*
-      -- emitting the row. Issue #6. On Linux this reads
-      -- `/proc/self/status` for `VmHWM`; on other platforms both
-      -- fields collapse to `none` and render as JSON `null`. The
-      -- capture itself is best-effort and never fails the run.
+      -- Capture memory after the measured work, before emitting.
+      -- Best-effort: capture failures collapse to `none`.
       let mem ← MemStats.capture
       emitRow benchName param count total hash .ok env
         (mem := mem) (cacheMode := cacheMode)

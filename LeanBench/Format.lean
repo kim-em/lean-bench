@@ -124,22 +124,17 @@ private def rawRow (cMaybe : Option Float) (totalTrials : Nat) (dp : DataPoint) 
     | some c => fmtFloat3 c
     | none   => "—"
   let baseStatus := statusSuffix dp.status
-  -- Doubling probe rows in `.linear` mode are demoted from the
-  -- verdict; mark them so a row with valid timing but `C=—` doesn't
-  -- look like a measurement failure.
+  -- `[probe]` and `[<floor]` mark rows whose `C=—` is structural, not
+  -- a measurement failure: probe rows are demoted in `.linear` mode,
+  -- below-floor rows are dominated by subprocess overhead.
   let probeMarked :=
     if dp.status == .ok && !dp.partOfVerdict then baseStatus ++ " [probe]"
     else baseStatus
-  -- Below-signal-floor rows are excluded from the verdict because
-  -- their per-call time is dominated by subprocess overhead — flag
-  -- them so users see why `C=—` for an `ok` row. Issue #15.
   let withFloor :=
     if dp.belowSignalFloor then probeMarked ++ " [<floor]"
     else probeMarked
-  -- With `outerTrials > 1` (issue #4), the table shows multiple rows
-  -- per `param` — one per trial. Annotate each so the user can tell
-  -- raw rows apart at a glance and so the same `C=` repeated across a
-  -- cluster doesn't look like duplication.
+  -- With `outerTrials > 1` annotate each row so a repeated `C=` across
+  -- the cluster doesn't read as duplication.
   let status :=
     if totalTrials > 1 then
       withFloor ++ s!" [trial {dp.trialIndex + 1}/{totalTrials}]"
@@ -507,10 +502,9 @@ def fmtAutoFit (ranking : AutoFit.Ranking) : Array String := Id.run do
         "  "  ++ rightpad scoreStrs[i]! scoreWidth ++
         "  "  ++ rightpad cStrs[i]! cWidth ++
         "  "  ++ toString f.okPoints ++ tag
-    -- For a `weak` verdict surface the actual reason so the user
-    -- knows whether to widen the ladder, raise `--param-ceiling`, or
-    -- tolerate the ambiguity. The `decisive` branch needs no extra
-    -- prose — the arrow speaks for itself.
+    -- On a `weak` verdict, surface the reason so the user knows whether
+    -- to widen the ladder, raise `--param-ceiling`, or tolerate the
+    -- ambiguity. `decisive` needs no extra prose; the arrow says it.
     match ranking.confidence with
     | .weak reason =>
       lines := lines.push s!"    ‼ inconclusive: {reason}"
@@ -658,16 +652,12 @@ private def fmtHashTable
     summary. -/
 def fmtFixedComparison (rep : FixedComparisonReport) : String := Id.run do
   let mut lines : Array String := #[]
-  -- Print env once at the top of a comparison rather than repeating
-  -- it inside each per-result block.
   match rep.results[0]?.bind (·.env?) with
   | some env => lines := lines.push s!"env: {RunEnv.fmtConcise env}"
   | none     => pure ()
   for r in rep.results do
     lines := lines.push (fmtFixedResult r (includeEnv := false))
     lines := lines.push ""
-  -- Relative timing: pick the first result's median as the baseline,
-  -- emit one ratio line per other result.
   match rep.results[0]? with
   | some baseline =>
     match baseline.medianNanos? with
@@ -769,10 +759,8 @@ def fmtCombinedVerify (r : CombinedVerifyReports) : String := Id.run do
     for what to expect when only hashes are available. -/
 def fmtComparison (rep : ComparisonReport) : String := Id.run do
   let mut lines : Array String := #[]
-  -- Print env once at the top of a comparison rather than repeating
-  -- it inside each per-result block. Every result in a single
-  -- `compare` invocation shares the same parent env, so taking the
-  -- first one's snapshot is correct.
+  -- Every result in a single `compare` shares the same parent env, so
+  -- the first snapshot is correct.
   match rep.results[0]?.bind (·.env?) with
   | some env => lines := lines.push s!"env: {RunEnv.fmtConcise env}"
   | none     => pure ()
