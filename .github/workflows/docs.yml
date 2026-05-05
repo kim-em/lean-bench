@@ -55,7 +55,11 @@ jobs:
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          # Verso's `manualMain --output _site` writes to
+          # `_site/html-multi/` (the multi-page renderer); upload that
+          # subdir so `index.html` lands at the artifact root and the
+          # site serves at <url>/ rather than <url>/html-multi/.
+          path: _site/html-multi
 
   deploy:
     if: github.ref == 'refs/heads/master'
