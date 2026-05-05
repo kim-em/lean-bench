@@ -1,0 +1,69 @@
+name: docs
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one pages deploy at a time. Don't cancel a running deploy with a
+# new build — Pages doesn't support concurrent deploys cleanly.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Build lean-bench (root) so example exes exist
+        run: lake build fib_benchmark_example
+
+      # Run the directive's own unit tests first; if these fail, the
+      # downstream `bench` blocks would fail mysteriously.
+      - name: Run directive unit tests
+        working-directory: docs
+        run: |
+          lake build test-bench-config-parse test-bench-diff test-bench-gate test-bench-normalise
+          lake exe test-bench-config-parse
+          lake exe test-bench-diff
+          lake exe test-bench-normalise
+          # Gate: with the env var set, the gate should open.
+          LEAN_BENCH_DOCS_CHECK=1 lake exe test-bench-gate | grep -q "gate: OPEN"
+          # And without it, closed.
+          (unset LEAN_BENCH_DOCS_CHECK && lake exe test-bench-gate | grep -q "gate: CLOSED")
+
+      - name: Build docs with live execution gate enabled
+        working-directory: docs
+        env:
+          LEAN_BENCH_DOCS_CHECK: "1"
+        run: |
+          lake build
+          lake exe generate-bench-docs --output ../_site --depth 2
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
