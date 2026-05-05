@@ -194,11 +194,11 @@ def testRunnerUpFarDecisive : IO UInt32 := do
     IO.eprintln s!"FAIL: clear runner-up gap should produce decisive verdict; got {repr v}"
     return 1
 
-/-- Codex review concern: with the prior `Nat → Nat` design, models
-    with cheaper-to-evaluate `M` discarded fewer high-end rungs, and
-    `stdLogC` was scored over different rung sets. With the
-    log-domain catalog, every model evaluates on the *same* common
-    rung set — every `Fit.okPoints` must be equal. -/
+/-- With the prior `Nat → Nat` design, models with cheaper-to-evaluate
+    `M` discarded fewer high-end rungs and `stdLogC` was scored over
+    different rung sets. With the log-domain catalog, every model
+    evaluates on the *same* common rung set — every `Fit.okPoints`
+    must be equal. -/
 def testCommonRungSet : IO UInt32 := do
   let samples := synth "n" 5.0 polyParams
   let r := rank samples

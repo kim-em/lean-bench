@@ -23,10 +23,9 @@ Two row kinds exist. They share most fields and the same
   Carries one `(repeat_index, total_nanos)` triple per child
   invocation; no inner-repeat loop, no parameter.
 
-Rows are tagged with `"kind":"parametric"` or `"kind":"fixed"`. Older
-parametric rows produced before this field existed omit `kind`
-entirely; readers MUST treat a missing `kind` as `"parametric"` to
-preserve backwards compatibility (see [Compatibility](#compatibility)).
+Rows are tagged with `"kind":"parametric"` or `"kind":"fixed"`.
+Readers MUST reject rows whose `kind` mismatches the parser
+(e.g. a fixed-shaped row arriving at the parametric parser).
 
 ## Versioning
 
@@ -70,7 +69,7 @@ key on the integer only.
 | key              | type    | meaning |
 |------------------|---------|---------|
 | `schema_version` | integer | Always `1` for v1 rows. |
-| `kind`           | string  | `"parametric"` or `"fixed"`. Always emitted by current writers. Readers MUST reject a row whose `kind` mismatches the expected kind for the parser; a missing `kind` is tolerated only as `"parametric"` (the back-compat carve-out for parametric rows produced before this field was added). |
+| `kind`           | string  | `"parametric"` or `"fixed"`. Readers MUST reject a row whose `kind` mismatches the expected kind for the parser. |
 | `function`       | string  | Fully-qualified Lean name of the registered benchmark. |
 | `total_nanos`    | integer | Wall time in nanoseconds for the measured work. |
 | `status`         | string  | One of `"ok"`, `"timed_out"`, `"killed_at_cap"`, `"error"`. |
@@ -97,20 +96,16 @@ were `null`.
 |--------------------|------------------|---------|
 | `result_hash`      | string \| null   | Hex-prefixed `0xDEADBEEF` literal (case-insensitive). `null` when the function's return type lacks `Hashable`. |
 | `error`            | string \| null   | Free-form message for `status == "error"`. `null` otherwise. |
-| `env`              | object \| null   | Reproducibility metadata captured at child startup — see [Environment metadata](#environment-metadata). Emitted on every row by current writers; absence is tolerated for back-compat with hand-rolled fixtures. |
+| `env`              | object \| null   | Reproducibility metadata captured at child startup — see [Environment metadata](#environment-metadata). Emitted on every row by current writers. |
 | `alloc_bytes`      | integer \| null  | Total bytes allocated by the Lean runtime over the child's lifetime. Always `null` today — Lean 4 has no portable in-process API to read this. The key is reserved so the field can land additively when a future Lean release exposes allocation counters. See [Memory metrics](#memory-metrics). |
 | `peak_rss_kb`      | integer \| null  | Peak resident-set size of the child process, in kibibytes (1024 bytes). On Linux read from `/proc/self/status` (`VmHWM:`); `null` on macOS, Windows, and any other platform without `/proc`. See [Memory metrics](#memory-metrics). |
-
-`kind` is also classified as optional from the reader's standpoint
-(absence defaults to `"parametric"`), but every current writer emits
-it explicitly; producing a row without `kind` is a writer bug.
 
 ### Optional fields (parametric only)
 
 | key                | type             | meaning |
 |--------------------|------------------|---------|
 | `per_call_nanos`   | number \| null   | `total_nanos / inner_repeats` precomputed. Derived; readers MAY recompute it from `total_nanos` and `inner_repeats` when absent. Emitted as `null` on synthesized error / killed-at-cap rows where `inner_repeats == 0` (a real division-by-zero), to keep every emitted row valid JSON. |
-| `cache_mode`       | string           | `"warm"` (auto-tuned inner repeats inside one child, the v0.1 default) or `"cold"` (single untuned invocation; the parent respawns the child for every ladder rung). Absence is tolerated for back-compat with rows produced before issue #12 and treated as `"warm"`. See [`advanced.md#cache-modes`](advanced.md#cache-modes). |
+| `cache_mode`       | string           | `"warm"` (auto-tuned inner repeats inside one child, the v0.1 default) or `"cold"` (single untuned invocation; the parent respawns the child for every ladder rung). See [`advanced.md#cache-modes`](advanced.md#cache-modes). |
 
 ### Reserved-for-future-use fields
 
@@ -153,8 +148,7 @@ The value is a JSON object with the following keys. Producers MUST
 emit every key. Fields with no available value land as JSON `null`,
 NOT as an absent key — the issue #11 acceptance criterion is
 "Missing metadata is handled explicitly rather than silently
-omitted." Readers MUST tolerate absent keys as `null` for
-back-compat with hand-rolled fixtures.
+omitted."
 
 | key                  | type            | meaning |
 |----------------------|-----------------|---------|
@@ -245,21 +239,15 @@ The contract for every reader and writer:
 
 - Accept rows whose `schema_version` is in their `supportedVersions`
   set (currently the singleton `{1}`).
-- Reject rows whose `schema_version` is outside that set with an
-  explicit error that names the unsupported version. Silent
-  best-effort reads of unknown versions risk producing wrong
-  results.
-- Tolerate a missing `schema_version` field by treating it as v1.
-  This is the back-compat carve-out for hand-rolled fixtures and
-  any pre-versioning row in the wild.
+- Reject rows whose `schema_version` is outside that set, missing,
+  or non-integer with an explicit error that names the unsupported
+  version. Silent best-effort reads of unknown versions risk
+  producing wrong results.
 - Tolerate unknown extra keys: ignore them rather than failing.
 - Tolerate missing optional keys (treating them as `null` / absent /
   the documented default).
-- Treat a missing `kind` field as `"parametric"`. This is the one
-  back-compat hatch for rows produced before `kind` was tagged on
-  the parametric side. A present-but-mismatched `kind` (e.g. a
-  fixed-shaped row arriving at the parametric parser) MUST be
-  rejected.
+- Reject rows whose `kind` is missing or whose value mismatches the
+  parser (e.g. a fixed-shaped row arriving at the parametric parser).
 
 **Readers MAY:**
 

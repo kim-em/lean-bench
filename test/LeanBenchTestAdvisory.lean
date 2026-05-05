@@ -347,8 +347,7 @@ def testCustomEmptyRejected : IO UInt32 := do
 /-- Duplicate params in `.custom` are rejected by validation: the
     formatter keys `C` lookup by `param`, so two rows with the same
     param would render with the same ratio and the same warmup
-    dagger, giving a misleading report. Codex flagged this in the
-    issue #15 review. -/
+    dagger, giving a misleading report. -/
 def testCustomDuplicateRejected : IO UInt32 := do
   let badCfg : BenchmarkConfig := { paramSchedule := .custom #[1, 2, 2, 4] }
   match badCfg.validate with

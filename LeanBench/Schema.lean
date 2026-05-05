@@ -26,10 +26,7 @@ namespace Schema
 [`doc/schema.md#versioning`](../doc/schema.md#versioning). -/
 def schemaVersion : Nat := 1
 
-/-! ## Row-kind discriminator
-
-Older parametric rows omit `kind` entirely. Readers treat a missing
-`kind` as `"parametric"`; writers emit it explicitly going forward. -/
+/-! ## Row-kind discriminator -/
 
 def kindParametric : String := "parametric"
 def kindFixed      : String := "fixed"
@@ -43,7 +40,7 @@ needs human review. -/
 
 /-- Required keys on every row, regardless of kind. -/
 def requiredCommonKeys : Array String :=
-  #["schema_version", "function", "status", "total_nanos"]
+  #["schema_version", "kind", "function", "status", "total_nanos"]
 
 /-- Required keys on a parametric row, in addition to
     `requiredCommonKeys`. -/
@@ -65,7 +62,7 @@ field is platform-best-effort: on platforms or workloads where the
 metric isn't available the writer emits JSON `null` rather than
 omitting the key. Readers MUST tolerate either form. -/
 def optionalCommonKeys : Array String :=
-  #["kind", "result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
+  #["result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
 
 /-- Optional keys emitted only on parametric rows today. -/
 def optionalParametricKeys : Array String :=
@@ -88,10 +85,8 @@ The order matches `LeanBench.RunEnv.toJson`'s emission order so the
 schema test can do a strict array comparison after sorting.
 
 Per issue #11: "Missing metadata is handled explicitly rather than
-silently omitted." Producers MUST therefore emit every key — fields
-the platform can't supply land as JSON `null`, never as an absent
-key. Readers tolerate absence (treat it as `null`) for back-compat
-with hand-rolled fixtures. -/
+silently omitted." Producers MUST emit every key — fields the
+platform can't supply land as JSON `null`, never as an absent key. -/
 def envKeys : Array String :=
   #["lean_version", "lean_toolchain", "platform_target",
     "os", "arch", "cpu_model", "cpu_cores", "hostname",
@@ -116,59 +111,35 @@ def cacheModeStrings : Array String :=
 
 /-! ## Version handling
 
-Reader contract: accept exactly the versions we know how to read.
-There are no historical versions yet, so the admitted set is
-`{schemaVersion}` plus a back-compat carve-out for missing
-`schema_version`. -/
-
-/-- Pull `schema_version` off a row. Missing → `none` (callers
-    decide whether to default to `1` or fail). -/
-def getVersion? (json : Json) : Option Nat :=
-  match json.getObjValAs? Nat "schema_version" with
-  | .ok n => some n
-  | .error _ => none
+Reader contract: accept exactly the versions we know how to read. -/
 
 /-- The set of `schema_version` values this reader can interpret.
     Currently a singleton; future readers add older versions here as
     they implement migrations. -/
 def supportedVersions : Array Nat := #[schemaVersion]
 
-/-- Validate that a row's `schema_version` is one we can read.
-
-Rules:
-
-- Missing `schema_version` is tolerated and treated as v1. This is
-  the back-compat carve-out for hand-rolled fixtures and for any
-  pre-versioning row that might still be in the wild.
-- An explicit `schema_version` outside `supportedVersions` is
-  rejected with an explicit error that names the version. We MUST
-  NOT silently best-effort-read a future version (a renamed field
-  would silently parse as `null`) or an older one we don't yet
-  know how to migrate. -/
+/-- Validate that a row's `schema_version` is one we can read. A
+    `schema_version` outside `supportedVersions` is rejected with an
+    explicit error that names the version: silently best-effort-reading
+    a future version would let a renamed field parse as `null`, and
+    older versions need explicit migrations. -/
 def checkVersion (json : Json) : Except String Unit := do
-  match getVersion? json with
-  | none => .ok ()
-  | some v =>
-    if supportedVersions.contains v then .ok ()
-    else if v > schemaVersion then
-      .error s!"schema_version {v} is newer than this reader (max {schemaVersion}); upgrade lean-bench to read it"
-    else
-      .error s!"schema_version {v} is older than this reader supports (supported: {supportedVersions}); migration not implemented"
+  let v ← match json.getObjValAs? Nat "schema_version" with
+    | .ok v => .ok v
+    | .error _ => .error "missing or non-integer schema_version field"
+  if supportedVersions.contains v then .ok ()
+  else if v > schemaVersion then
+    .error s!"schema_version {v} is newer than this reader (max {schemaVersion}); upgrade lean-bench to read it"
+  else
+    .error s!"schema_version {v} is older than this reader supports (supported: {supportedVersions}); migration not implemented"
 
-/-- Read the `kind` discriminator. Default `"parametric"` when the
-    field is missing — see the back-compat carve-out in
-    [`doc/schema.md#compatibility`](../doc/schema.md#compatibility). -/
-def getKind (json : Json) : String :=
-  match json.getObjValAs? String "kind" with
-  | .ok s => s
-  | .error _ => kindParametric
-
-/-- Validate that a row's `kind` matches `expected` (or is absent —
-    treated as `"parametric"` per the back-compat rule). Used by both
+/-- Validate that a row's `kind` matches `expected`. Used by both
     parsers to refuse rows that were emitted from the wrong path
     (e.g. a fixed row mis-routed into `parseChildRow`). -/
 def checkKind (expected : String) (json : Json) : Except String Unit := do
-  let actual := getKind json
+  let actual ← match json.getObjValAs? String "kind" with
+    | .ok s => .ok s
+    | .error _ => .error "missing or non-string kind field"
   if actual == expected then .ok ()
   else .error s!"kind mismatch: expected {expected}, got {actual}"
 

@@ -13,8 +13,8 @@ open LeanBench
 /-- A single hand-rolled JSONL row exactly like what `Child.emitRow`
     produces, with all the schema fields in canonical order. -/
 def sampleRow : String :=
-  "{\"schema_version\":1,\"function\":\"foo.bar\",\"param\":42," ++
-  "\"inner_repeats\":1024,\"total_nanos\":3000000," ++
+  "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
+  "\"param\":42,\"inner_repeats\":1024,\"total_nanos\":3000000," ++
   "\"per_call_nanos\":2929.6875,\"result_hash\":\"0xdeadbeef\"," ++
   "\"status\":\"ok\",\"error\":null}"
 

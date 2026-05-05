@@ -122,26 +122,18 @@ def runProfile (name : Lean.Name) (param : Nat) (profilerCmd : String)
   let childArgs := profileChildArgs spec param
   match buildProfileArgv profilerCmd exe childArgs with
   | none =>
-    -- The CLI handler guards against empty profilerCmd before reaching
-    -- here, so this branch is defensive only. Kept so direct callers
-    -- of `runProfile` (test fixtures, downstream tooling) get a clean
-    -- error instead of an empty-argv `IO.Process.spawn` panic.
+    -- Defensive: the CLI handler also guards against empty profilerCmd.
     throw (.userError "profile: --profiler must be a non-empty command (e.g. \"perf stat --\")")
   | some (cmd, args) =>
-    -- Echo the wrapped command to stderr so the user sees exactly what
-    -- gets exec'd. Useful when the profiler is misconfigured ("perf:
-    -- not found") or when debugging what argv the harness actually
-    -- assembled.
+    -- Echo the wrapped command so misconfiguration ("perf: not found")
+    -- and argv-assembly bugs are visible.
     let argLine := String.intercalate " " args.toList
     IO.eprintln s!"lean-bench profile: {cmd} {argLine}"
     let child ← IO.Process.spawn {
       cmd := cmd
       args := args
-      -- Inherit so the JSONL row lands on stdout next to whatever the
-      -- profiler prints. Some profilers (`perf record`) write to
-      -- stderr; some (`perf stat`) write a summary to stderr; some
-      -- (`samply`) write a server URL. Treating all of them as
-      -- opaque text streams means we don't need a per-tool adapter.
+      -- Inherit: profilers write to varying mixes of stdout/stderr.
+      -- Treating them as opaque streams avoids a per-tool adapter.
       stdout := .inherit
       stderr := .inherit
       stdin  := .null

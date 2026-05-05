@@ -121,13 +121,13 @@ branching leaking through the design.
 ## What's intentionally NOT in v0.1
 
 - **Elaboration-time subprocess sanity check** ("does `f 0` finish
-  in < 1s?"). Codex review identified this as the worst design
-  choice in the original draft: it makes the elaborator depend on
-  the compiled binary, which is circular and phase-dependent. v0.1
-  static checks only verify symbol existence, arity, and complexity
-  type. Compiled-code sanity checks live in `lean-bench verify`,
-  which spawns the existing child path against `f 0` and `f 1` for
-  each registered benchmark and reports any non-`ok` rows.
+  in < 1s?"). Considered and rejected: it makes the elaborator
+  depend on the compiled binary, which is circular and phase-
+  dependent. v0.1 static checks only verify symbol existence,
+  arity, and complexity type. Compiled-code sanity checks live in
+  `lean-bench verify`, which spawns the existing child path against
+  `f 0` and `f 1` for each registered benchmark and reports any
+  non-`ok` rows.
 
 - **Strong verdict labels.** The verdict fits the log-log slope β of
   `C` vs `param` over the trimmed tail (leading 20% of ratios
@@ -176,6 +176,32 @@ detail rather than a benchmark-shape knob. Adding a new override is a
 one-field change in `ConfigOverride` plus one `parsedFlag?` line in
 `LeanBench.Cli`.
 
+Some overrides only make sense for some schedules. `--param-floor`
+and `--param-ceiling` shape the doubling ladder and have no effect
+on `.custom`, which walks a fixed user-supplied list. Rather than
+silently ignoring those flags, the runner emits a per-benchmark
+advisory naming the inert flags so CI logs make the mismatch
+visible (issue #46). The override pipeline itself is uniform —
+`apply` always merges — and the schedule-awareness lives in the
+advisory layer.
+
+## Suite-level CI budget
+
+`--total-seconds N` on `run` puts the whole suite under a wallclock
+cap (issue #9). The orchestrator schedules benchmarks in their
+natural order and, before each one, checks whether the deadline has
+passed; benchmarks that don't fit are recorded as `BudgetSkip`
+entries in the report and the export rather than silently dropped,
+so partial-suite runs are explicit.
+
+The deadline is also threaded into `runBenchmark`, which can cut a
+single benchmark short between rungs (the
+`BenchmarkResult.budgetTruncated` flag). Total wallclock is
+therefore approximately `total_seconds + maxSecondsPerCall` — one
+rung may be in flight when the deadline trips. The flag is only
+meaningful in suite mode (`--tag` / `--filter`); in single-benchmark
+mode the per-benchmark cap already bounds runtime.
+
 ## Failure modes and synthesized rows
 
 If the child exits 0 with a parseable JSONL row → use it. If the
@@ -184,6 +210,24 @@ killer task fired (i.e. `killedRef = true`) → synthesize a
 non-zero exits with no kill get a synthesized `error` row. The
 roundtrip path is exercised by `test/`; the kill path is exercised
 by the example benchmarks at the top end of the doubling ladder.
+
+### Exit codes
+
+`run` and `compare` distinguish three outcomes:
+
+- `0` — all benchmarks produced verdict-eligible data and any
+  baseline comparison passed.
+- `1` — baseline regression. Some benchmark exceeded the regression
+  threshold against the loaded baseline.
+- `2` — `exitNoUsableData`. At least one parametric benchmark
+  produced zero verdict-eligible rows, meaning every rung was
+  filtered out (killed at cap, errored, or otherwise unusable). A
+  registration that calibrates this badly invalidates the regression
+  check itself, so this code supersedes `1`. Issue #47.
+
+The summary line on stderr names the offending benchmarks so CI
+logs surface the calibration failure without parsing per-result
+advisories.
 
 ## Ladder semantics
 
@@ -201,11 +245,19 @@ The ladder shape is per-benchmark and chosen via `BenchmarkConfig.paramSchedule`
   walks `samples` consecutive rungs from `lastOk + 1` upward inside
   the refined bracket. Right for exponential complexity, where the
   cap kills doubling within 1–2 useful samples.
+- `.custom params` — walks an explicit user-supplied `Array Nat` of
+  param values in order, applying the wallclock cap rung-by-rung.
+  Right for benchmarks where the meaningful inputs aren't a
+  log-spaced family (e.g. realistic instance sizes from a corpus,
+  or a small set of regression-pinned `n`s). Opt-in only via
+  declaration-time `where { paramSchedule := .custom #[...] }`;
+  `.auto` never resolves to it. Issue #15.
 - `.auto` (default) — at runtime, evaluates the declared complexity
-  at probe points 8/16/32/64 and resolves to one of the above. The
-  test compares `complexity(64)/complexity(32)` against
-  `complexity(16)/complexity(8)`: equal for any `n^k` (→ doubling),
-  super-linearly larger for any `b^n` (→ linear, threshold 4×).
+  at probe points 8/16/32/64 and resolves to `.doubling` or
+  `.linear`. The test compares `complexity(64)/complexity(32)`
+  against `complexity(16)/complexity(8)`: equal for any `n^k` (→
+  doubling), super-linearly larger for any `b^n` (→ linear,
+  threshold 4×).
 
 Probe rows in `.linear` mode are kept in the report (so the user
 sees the cold-regime context that determined the bracket) but

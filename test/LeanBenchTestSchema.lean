@@ -209,14 +209,14 @@ needs a `schema_version` bump. -/
 def testCanonicalKeyConstants : IO UInt32 := do
   let okCommon :=
     Schema.requiredCommonKeys ==
-      #["schema_version", "function", "status", "total_nanos"]
+      #["schema_version", "kind", "function", "status", "total_nanos"]
   let okParametric :=
     Schema.requiredParametricKeys == #["param", "inner_repeats"]
   let okFixed :=
     Schema.requiredFixedKeys == #["repeat_index"]
   let okOptCommon :=
     Schema.optionalCommonKeys ==
-      #["kind", "result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
+      #["result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
   let okOptParametric :=
     Schema.optionalParametricKeys == #["per_call_nanos", "cache_mode"]
   let okEnvKeys :=
@@ -331,9 +331,9 @@ def testParseAcceptsExtraKey : IO UInt32 := do
 
 def testParseAcceptsMissingOptional : IO UInt32 := do
   -- Drop `result_hash` and `error` (both optional) and ensure the
-  -- parser still succeeds. `kind` is also optional in v1.
+  -- parser still succeeds.
   let row :=
-    "{\"schema_version\":1,\"function\":\"foo.bar\"," ++
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
     "\"param\":7,\"inner_repeats\":2,\"total_nanos\":1000," ++
     "\"per_call_nanos\":500.0,\"status\":\"ok\"}"
   match parseChildRow row with
@@ -349,7 +349,7 @@ def testParseRecomputesPerCallWhenAbsent : IO UInt32 := do
   -- `per_call_nanos` is documented as derived; readers MAY recompute
   -- it from `total_nanos / inner_repeats`. Pin that fallback.
   let row :=
-    "{\"schema_version\":1,\"function\":\"foo.bar\"," ++
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
     "\"param\":7,\"inner_repeats\":2,\"total_nanos\":1000," ++
     "\"status\":\"ok\"}"
   match parseChildRow row with
@@ -375,21 +375,6 @@ def testParseRejectsFutureVersion : IO UInt32 := do
   | .error msg =>
     expect s!"future-version error mentions '99': {msg}"
       (containsSub msg "99")
-
-def testParseToleratesMissingVersion : IO UInt32 := do
-  -- Hand-rolled fixtures or pre-versioning rows may omit
-  -- `schema_version`. The parser tolerates that and treats it as v1.
-  let row :=
-    "{\"function\":\"foo.bar\"," ++
-    "\"param\":3,\"inner_repeats\":4,\"total_nanos\":12," ++
-    "\"per_call_nanos\":3.0,\"status\":\"ok\"}"
-  match parseChildRow row with
-  | .error e =>
-    IO.eprintln s!"missing-version row failed to parse: {e}"
-    return 1
-  | .ok dp =>
-    expect s!"missing-version parses: {repr dp}"
-      (dp.param == 3 ∧ dp.innerRepeats == 4)
 
 /-! ## Fixed-row consumer-side mirrors -/
 
@@ -477,10 +462,20 @@ def testParseRejectsExplicitOldVersion : IO UInt32 :=
     "{\"schema_version\":0,\"kind\":\"parametric\",\"function\":\"foo.bar\",\"param\":1,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"}"
     "0" "parse.explicitOldVersion"
 
+def testParseRejectsMissingVersion : IO UInt32 :=
+  expectParseError
+    "{\"kind\":\"parametric\",\"function\":\"foo.bar\",\"param\":3,\"inner_repeats\":4,\"total_nanos\":12,\"per_call_nanos\":3.0,\"status\":\"ok\"}"
+    "schema_version" "parse.missingVersion"
+
 def testFixedParseRejectsExplicitOldVersion : IO UInt32 :=
   expectFixedParseError
     "{\"schema_version\":0,\"kind\":\"fixed\",\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
     "0" "fixed.explicitOldVersion"
+
+def testFixedParseRejectsMissingVersion : IO UInt32 :=
+  expectFixedParseError
+    "{\"kind\":\"fixed\",\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
+    "schema_version" "fixed.missingVersion"
 
 def testParseRejectsWrongKind : IO UInt32 :=
   -- A `kind:"fixed"` row must be rejected by the parametric parser.
@@ -496,8 +491,7 @@ def testFixedParseRejectsWrongKind : IO UInt32 :=
     "kind" "fixed.wrongKind"
 
 def testFixedParseRejectsMissingKind : IO UInt32 :=
-  -- Missing `kind` defaults to parametric per the back-compat rule;
-  -- the fixed parser must reject that.
+  -- Missing `kind` is rejected on both parsers.
   expectFixedParseError
     "{\"schema_version\":1,\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
     "kind" "fixed.missingKind"
@@ -609,12 +603,13 @@ def runTests : IO UInt32 := do
     , ("parse.recomputesPerCall",    testParseRecomputesPerCallWhenAbsent)
     , ("parse.futureVersionRejected",testParseRejectsFutureVersion)
     , ("parse.explicitOldVersion",   testParseRejectsExplicitOldVersion)
-    , ("parse.missingVersion",       testParseToleratesMissingVersion)
+    , ("parse.missingVersion",       testParseRejectsMissingVersion)
     , ("parse.wrongKind",            testParseRejectsWrongKind)
     , ("parse.missingRequired",      testParseRejectsMissingRequired)
     , ("fixed.extraKey",             testFixedParseAcceptsExtraKey)
     , ("fixed.futureVersionRejected",testFixedParseRejectsFutureVersion)
     , ("fixed.explicitOldVersion",   testFixedParseRejectsExplicitOldVersion)
+    , ("fixed.missingVersion",       testFixedParseRejectsMissingVersion)
     , ("fixed.missingOptional",      testFixedParseAcceptsMissingOptional)
     , ("fixed.wrongKind",            testFixedParseRejectsWrongKind)
     , ("fixed.missingKind",          testFixedParseRejectsMissingKind)
