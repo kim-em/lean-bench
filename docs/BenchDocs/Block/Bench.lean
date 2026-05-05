@@ -41,6 +41,10 @@ structure BenchConfig where
   /-- Space-separated argv (no shell parsing — embedded spaces aren't
   supported). -/
   argv       : String := ""
+  /-- Optional display form rendered in the prompt line. Defaults to
+  `lake exe <basename> <argv>` when `prog` looks like
+  `…/.lake/build/bin/<basename>`; otherwise `<prog> <argv>`. -/
+  display    : String := ""
   /-- Working directory of the spawned process, relative to the parent's
   cwd. Defaults to the lean-bench repo root. -/
   cwd        : String := ".."
@@ -82,6 +86,7 @@ private def BenchConfig.parser : ArgParse m BenchConfig :=
   BenchConfig.mk
     <$> .named  `prog       .string false
     <*> .namedD `argv       .string ""
+    <*> .namedD `display    .string ""
     <*> .namedD `cwd        .string ".."
     <*> .namedD `expectExit .nat    0
     <*> .namedD `normalise  .string ""
@@ -93,9 +98,37 @@ instance : FromArgs BenchConfig m := ⟨BenchConfig.parser⟩
 private def gateEnabled : IO Bool := do
   return (← IO.getEnv "LEAN_BENCH_DOCS_CHECK").isSome
 
-/-- Render the literal block body as a Verso code block. Used in both
-the editor mode (no execution) and after a successful live check. -/
-private def renderLiteralCodeBlock (str : StrLit) : DocElabM Term := do
+/-- The basename of `prog`'s path: text after the last `/`. -/
+private def basename (path : String) : String :=
+  let parts := path.splitOn "/"
+  parts.getLast?.getD path
+
+/-- Build the prompt line shown above the output, given the directive's
+config. If `display` is explicitly set, use it. Otherwise derive a
+`lake exe <basename> <argv>` form when `prog` lives under
+`.lake/build/bin/`, else `<prog> <argv>`. -/
+private def buildPromptLine (cfg : BenchConfig) : String :=
+  if !cfg.display.isEmpty then
+    "$ " ++ cfg.display
+  else if cfg.prog.contains '/' && (".lake/build/bin/").isPrefixOf
+      (cfg.prog.replace "../" "") then
+    let exe := basename cfg.prog
+    let argv := if cfg.argv.isEmpty then "" else " " ++ cfg.argv
+    "$ lake exe " ++ exe ++ argv
+  else
+    let argv := if cfg.argv.isEmpty then "" else " " ++ cfg.argv
+    "$ " ++ cfg.prog ++ argv
+
+/-- Render the bench block as a terminal-style code block: a synthetic
+`$ <command>` prompt line, followed by the literal expected output. -/
+private def renderBenchBlock (cfg : BenchConfig) (str : StrLit) : DocElabM Term := do
+  let body := s!"{buildPromptLine cfg}\n{str.getString}"
+  `(Verso.Doc.Block.code $(quote body))
+
+/-- Render a benchTranscript block as just the literal body (no
+synthetic prompt — the body usually already includes one or is verbatim
+external output). -/
+private def renderTranscriptBlock (str : StrLit) : DocElabM Term := do
   `(Verso.Doc.Block.code $(quote str.getString))
 
 /-! ## The `bench` directive -/
@@ -142,7 +175,7 @@ def bench : CodeBlockExpander
     let cfg ← BenchConfig.parser.run args
     if (← liftM gateEnabled) then
       runAndCheck cfg str
-    return #[← renderLiteralCodeBlock str]
+    return #[← renderBenchBlock cfg str]
 
 /-! ## The `benchTranscript` directive -/
 
@@ -158,6 +191,6 @@ private def TranscriptConfig.parser : ArgParse m TranscriptConfig :=
 def benchTranscript : CodeBlockExpander
   | args, str => do
     let _ ← TranscriptConfig.parser.run args
-    return #[← renderLiteralCodeBlock str]
+    return #[← renderTranscriptBlock str]
 
 end BenchDocs.Block

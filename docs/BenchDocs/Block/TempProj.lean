@@ -88,11 +88,8 @@ private def addRun (run : TempProjRun) : CoreM Unit := do
 
 /-! ## Path substitution -/
 
-/-- Replace every occurrence of `{{LEAN_BENCH_PATH}}` in a file body
-with the absolute path to the lean-bench repository root.
-
-The directive runs from within the docs/ subpackage, so the repo root
-is one level up from `IO.currentDir`. -/
+/-- The directive runs from within the docs/ subpackage, so the
+lean-bench repo root is one level up from `IO.currentDir`. -/
 private def leanBenchAbsRoot : IO String := do
   let here ← IO.currentDir
   let parent := here.parent.getD here
@@ -100,6 +97,15 @@ private def leanBenchAbsRoot : IO String := do
 
 private def substitute (s : String) (token : String) (replacement : String) : String :=
   s.replace token replacement
+
+/-- Rewrite the canonical git-based lean-bench require to a path-based
+one pointing at the local checkout. This lets the rendered lakefile.toml
+show what a downstream user actually writes
+(`git = "https://github.com/kim-em/lean-bench.git"` + `rev = "main"`)
+while CI verifies against the in-tree code via a path require. -/
+private def swapLeanBenchRequire (s : String) (absRoot : String) : String :=
+  let pat := "git = \"https://github.com/kim-em/lean-bench.git\"\nrev = \"main\""
+  s.replace pat s!"path = \"{absRoot}\""
 
 /-! ## Inner code-block directives -/
 
@@ -120,7 +126,15 @@ def tempProjFile : CodeBlockExpander
   | args, str => do
     let cfg ← FileConfig.parser.run args
     addFile { path := cfg.path, contents := str.getString }
-    return #[← `(Verso.Doc.Block.code $(quote str.getString))]
+    -- Render: a paragraph showing the file path as a code-styled
+    -- inline, followed by the file body as a code block. This keeps
+    -- file blocks visually distinct from the run block's terminal
+    -- output that follows them in the same `::: tempProj` directive.
+    let label := s!"In {cfg.path}:"
+    return #[
+      ← `(Verso.Doc.Block.para #[Verso.Doc.Inline.text $(quote label)]),
+      ← `(Verso.Doc.Block.code $(quote str.getString))
+    ]
 
 structure RunConfig where
   /-- Argv passed to `lake` (e.g. `"exe bench list"`). -/
@@ -170,7 +184,12 @@ def tempProjRun : CodeBlockExpander
       normalise := normalisers
       expectExit := cfg.expectExit
     }
-    return #[← `(Verso.Doc.Block.code $(quote str.getString))]
+    -- Render with a synthetic shell prompt so the block visually
+    -- reads as a terminal session: the command line, then the
+    -- expected output. This distinguishes a tempProjRun from the
+    -- preceding tempProjFile blocks in the same directive.
+    let rendered := s!"$ lake exe {cfg.args}\n{str.getString}"
+    return #[← `(Verso.Doc.Block.code $(quote rendered))]
 
 /-! ## The outer directive -/
 
@@ -198,12 +217,20 @@ private def materialiseAndCheck (cfg : TempProjConfig) (firstStr : StrLit) : Doc
     -- as the docs subpackage (which already matches lean-bench).
     let toolchain ← IO.FS.readFile "lean-toolchain"
     IO.FS.writeFile (dir / "lean-toolchain") toolchain
-    -- Write user files, substituting the lean-bench abs-path token.
+    -- Write user files. Two substitutions before write:
+    -- (a) the canonical git+rev lean-bench require → a path require
+    --     pointing at the local checkout (so the rendered doc shows
+    --     what a real user writes, while CI tests the in-tree code).
+    -- (b) the explicit {{LEAN_BENCH_PATH}} token → the local checkout
+    --     (escape hatch for non-require uses).
     for f in st.files do
       let abs := dir / f.path
       if let some parent := abs.parent then
         IO.FS.createDirAll parent
-      let body := substitute f.contents "{{LEAN_BENCH_PATH}}" absRoot
+      let body :=
+        f.contents
+          |> swapLeanBenchRequire (absRoot := absRoot)
+          |> substitute (token := "{{LEAN_BENCH_PATH}}") (replacement := absRoot)
       IO.FS.writeFile abs body
     -- Build once.
     let build ← IO.Process.output { cmd := "lake", args := #["build"], cwd := some dir.toString }

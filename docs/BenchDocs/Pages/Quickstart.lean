@@ -23,7 +23,8 @@ defaultTargets = ["bench"]
 
 [[require]]
 name = "lean-bench"
-path = "{{LEAN_BENCH_PATH}}"
+git = "https://github.com/kim-em/lean-bench.git"
+rev = "main"
 
 [[lean_lib]]
 name = "MyProject"
@@ -55,20 +56,11 @@ registered benchmarks:
 
 :::
 
-In real downstream projects, replace the `path = "{{LEAN_BENCH_PATH}}"`
-require with a `git`-based one:
-
-```
-[[require]]
-name = "lean-bench"
-git = "https://github.com/kim-em/lean-bench.git"
-rev = "main"
-```
-
-The `{{LEAN_BENCH_PATH}}` token is substituted at doc-build time with
-the absolute path to the lean-bench checkout under test, so the
-example actually compiles against the in-tree lean-bench rather than
-chasing a remote.
+When CI builds this doc, the `git`+`rev` lines above are transparently
+swapped for a `path` require pointing at the local lean-bench checkout
+under test, so the example compiles against the in-tree code rather
+than chasing the remote. Downstream readers see the form they would
+write in their own project.
 
 # Build and run
 
