@@ -282,45 +282,78 @@ setup_fixed_benchmark MyBench.lllReduce30 where {
 }
 ```
 
-The registered name must resolve to a value of type `α` (pure) or
-`IO α` (effectful). There is no parameter and no complexity model —
-the benchmark exists to record an absolute wall-clock time on a
-canonical input. The harness performs one warmup call followed by
-`config.repeats` measured calls and reports median / min / max plus
-a hash-agreement check across repeats.
+The registered name must resolve to a callable: `Unit → α`,
+`Unit → IO α`, or `IO α`. A bare value of type `α` is rejected at
+elaboration — the Lean compiler folds closed pure expressions into
+a compile-time constant, so the harness would measure a constant
+load instead of the intended work (issue #54). `IO α` is accepted
+but `pure <closedExpr>` bodies have the same problem; prefer the
+unit-parameter forms.
 
-If `α` has a `Hashable` instance, every measured call's result is
-hashed; cross-repeat agreement guards against non-determinism. The
-optional `expectedHash` field adds correctness on top: the first
-`ok` repeat's hash must equal the declared value, catching
-regressions that produce a different-but-stable hash (e.g. a `Bool`
+There is no parameter and no complexity model — the benchmark
+records an absolute wall-clock time on a canonical input. The
+harness does one warmup call, then `config.repeats` measured
+calls, and reports median / min / max plus cross-repeat hash
+agreement (when the result type is `Hashable`). The optional
+`expectedHash` field adds correctness on top: the first `ok`
+repeat's hash must equal the declared value, catching regressions
+that produce a different-but-stable hash (e.g. a `Bool`
 flipping). Without `Hashable`, neither check applies. -/
 
-/-- Inspect a registered name's type. Returns `(elementTy, isIO)`
-where `elementTy` is `α` for both `α` and `IO α` cases. The IO check
-is semantic, not syntactic: we try to unify the declared type against
-`IO ?α`, which means `EIO IO.Error α`, `BaseIO α` (after reducible
-unfolding), and any reducible alias of `IO` are all accepted. A bare
-syntactic `isAppOfArity ``IO 1` would miss those and silently
-benchmark the IO action as a pure value (a serious correctness bug),
-so we use full `isDefEq`.
+/-- Shape of a registered fixed-benchmark target.
+- `pureUnit` : `Unit → α`
+- `ioUnit`   : `Unit → IO α`
+- `io`       : `IO α` -/
+inductive FixedShape where
+  | pureUnit
+  | ioUnit
+  | io
+  deriving Inhabited, Repr, BEq
 
-Rejects anything with an unbound function arrow — fixed benchmarks
-are values, not functions. -/
+/-- Inspect a registered name's type. Returns `(elementTy, shape)`
+where `elementTy` is the element type `α`. Accepted shapes:
+`Unit → α`, `Unit → IO α`, `IO α`. Bare values and other function
+arrows are rejected (issue #54).
+
+The IO check uses `isDefEq` against `IO ?α` rather than syntactic
+head matching, so `EIO IO.Error α`, `BaseIO α`, and reducible
+aliases of `IO` are all accepted. -/
 def expectFixedValue (env : Environment) (declName : Name) :
-    CommandElabM (Expr × Bool) := do
+    CommandElabM (Expr × FixedShape) := do
   let some ci := env.find? declName
     | throwError "setup_fixed_benchmark: name `{declName}` is not defined"
   let ty := ci.type
-  if ty.isForall then
-    throwError "setup_fixed_benchmark: name `{declName}` must be a value or `IO α`; got function type `{ty}`"
+  -- Each shape probe runs against a saved state and restores it on
+  -- failure, so a partial unification from a failing probe can't
+  -- pre-bind metavariables used by the next one.
   liftTermElabM do
+    -- Probe 1: `Unit → β`, then check whether `β = IO γ`.
+    let s ← Meta.saveState
+    let β ← Meta.mkFreshExprMVar (mkSort Level.one)
+    let unitToβ := mkForall `_ .default (.const ``Unit []) β
+    if (← Meta.isDefEq ty unitToβ) then
+      let resTy ← instantiateMVars β
+      let γ ← Meta.mkFreshExprMVar (mkSort Level.one)
+      let ioγ ← Meta.mkAppM ``IO #[γ]
+      if (← Meta.isDefEq resTy ioγ) then
+        return ((← instantiateMVars γ), FixedShape.ioUnit)
+      return (resTy, FixedShape.pureUnit)
+    s.restore
+    -- Probe 2: `IO α`.
     let α ← Meta.mkFreshExprMVar (mkSort Level.one)
     let ioα ← Meta.mkAppM ``IO #[α]
     if (← Meta.isDefEq ty ioα) then
-      let elemTy ← instantiateMVars α
-      return (elemTy, true)
-    return (ty, false)
+      return ((← instantiateMVars α), FixedShape.io)
+    s.restore
+    -- Anything else is rejected. The error message names the three
+    -- accepted shapes and points at the compile-time-folding
+    -- footgun for pure values.
+    if ty.isForall then
+      throwError
+        "setup_fixed_benchmark: name `{declName}` has unsupported function type `{ty}`; \
+         the target must be `Unit → α`, `Unit → IO α`, or `IO α`"
+    throwError
+      m!"setup_fixed_benchmark: name `{declName}` has type `{ty}`, which is not a callable.\n\nBare-value registrations are rejected (issue #54): closed pure expressions get folded into a compile-time constant, so the harness would measure a ~100ns constant load rather than the intended work. Use one of:\n  • `Unit → α`     (recommended)\n  • `Unit → IO α`\n  • `IO α`         (caveat: `pure <closedExpr>` is also folded)"
 
 syntax (name := setupFixedBenchmark) "setup_fixed_benchmark "
   ident (setupBenchmarkWhere)? : command
@@ -340,7 +373,7 @@ where
     let env ← getEnv
     let ns ← getCurrNamespace
     let fnName := resolveDecl env ns fnId
-    let (resTy, isIO) ← expectFixedValue env fnName
+    let (resTy, shape) ← expectFixedValue env fnName
     let isHashable ← hasHashable resTy
     let configTerm? : Option Term ← match whereClause? with
       | none => pure none
@@ -351,42 +384,59 @@ where
     let cfgDeclName := fnName.str "_leanBench_fixedConfig"
     let rIdent := mkIdent rName
     let cfgIdent := mkIdent cfgDeclName
-    -- Four shapes from `(isIO, isHashable)`. All bracket the timer
-    -- around one invocation; the result is forced via `blackBox` to
-    -- defeat dead-code elimination, like the parametric path.
+    -- Six shapes from `(shape, isHashable)`. All bracket the timer
+    -- around one invocation and force the result via `blackBox` to
+    -- defeat DCE, like the parametric path.
     let mkRunner : CommandElabM (TSyntax `command) :=
-      match isIO, isHashable with
-      | true, true =>
+      match shape, isHashable with
+      | .pureUnit, true =>
         `(command|
           @[inline] def $rIdent : IO (Nat × Option UInt64) := do
             let t₀ ← IO.monoNanosNow
-            let r ← ($fnId : IO _)
+            let r := $fnId ()
             let h := Hashable.hash r
             LeanBench.blackBox h
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, some h))
-      | true, false =>
+      | .pureUnit, false =>
         `(command|
           @[inline] def $rIdent : IO (Nat × Option UInt64) := do
             let t₀ ← IO.monoNanosNow
-            let r ← ($fnId : IO _)
+            let r := $fnId ()
             LeanBench.blackBox (Hashable.hash (sizeOf r))
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, none))
-      | false, true =>
+      | .ioUnit, true =>
         `(command|
           @[inline] def $rIdent : IO (Nat × Option UInt64) := do
             let t₀ ← IO.monoNanosNow
-            let r := $fnId
+            let r ← (($fnId : Unit → IO _) ())
             let h := Hashable.hash r
             LeanBench.blackBox h
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, some h))
-      | false, false =>
+      | .ioUnit, false =>
         `(command|
           @[inline] def $rIdent : IO (Nat × Option UInt64) := do
             let t₀ ← IO.monoNanosNow
-            let r := $fnId
+            let r ← (($fnId : Unit → IO _) ())
+            LeanBench.blackBox (Hashable.hash (sizeOf r))
+            let t₁ ← IO.monoNanosNow
+            return (t₁ - t₀, none))
+      | .io, true =>
+        `(command|
+          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+            let t₀ ← IO.monoNanosNow
+            let r ← ($fnId : IO _)
+            let h := Hashable.hash r
+            LeanBench.blackBox h
+            let t₁ ← IO.monoNanosNow
+            return (t₁ - t₀, some h))
+      | .io, false =>
+        `(command|
+          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+            let t₀ ← IO.monoNanosNow
+            let r ← ($fnId : IO _)
             LeanBench.blackBox (Hashable.hash (sizeOf r))
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, none))

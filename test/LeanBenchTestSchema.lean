@@ -34,8 +34,8 @@ setup_benchmark schemaProbe n => n + 1 where {
 }
 
 /-- A fixed-benchmark counterpart so the fixed-emit path is exercised
-    by `verify`. -/
-def schemaFixedProbe : UInt64 := 7
+    by `verify`. Wrapped in `Unit →` per issue #54. -/
+def schemaFixedProbe : Unit → UInt64 := fun () => 7
 
 setup_fixed_benchmark schemaFixedProbe where { repeats := 1, warmup := false }
 

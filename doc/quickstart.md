@@ -614,13 +614,15 @@ either to compare against an external reference (FLINT, fpLLL, …) or
 to catch absolute-performance regressions over time. The
 `setup_fixed_benchmark` macro registers a benchmark of this shape.
 
-The function name *is* the benchmark name and must resolve to either
-`α` (a pure value) or `IO α` (an effectful computation, useful when
-the workload reads input from disk or shells out to an external
-tool):
+The function name *is* the benchmark name and must resolve to a
+*callable*:
+
+- `Unit → α`     — invoked as `f ()` once per measured repeat (recommended);
+- `Unit → IO α`  — invoked as `f ()` and then `←`-bound;
+- `IO α`         — `←`-bound directly (legacy; see caveat below).
 
 ```lean
-def factorXOverFTwo : Polynomial Bool := -- ... single hard problem
+def factorXOverFTwo : Unit → Polynomial Bool := fun () => -- ... single hard problem
 setup_fixed_benchmark factorXOverFTwo
 
 def runFplll : IO LLLOutput := -- ... shell out
@@ -629,6 +631,23 @@ setup_fixed_benchmark runFplll where {
   maxSecondsPerCall := 30.0
 }
 ```
+
+> **Why `Unit →` matters (issue #54).** A bare-`α` registration —
+> `def x : α := <closedExpr>` — gets folded by the Lean compiler
+> into a constant baked into the binary, so the harness would
+> measure a ~100–250 ns constant load instead of work. The macro
+> rejects that shape.
+>
+> `IO α` is accepted for compatibility, but `pure <closedExpr>`
+> bodies have the same problem; prefer `Unit → α` or
+> `Unit → IO α`. Even those are not bullet-proof — if the body
+> itself is closed (`fun () => goodFib 60`) the back-end can still
+> fold it. The reliable mitigation is to thread inputs through
+> runtime state (read from `IO.Ref`, disk, or a CLI argument).
+>
+> Defense-in-depth: when a fixed benchmark's median wall time is
+> below 1 µs, the report appends a `‼` advisory pointing at this
+> trap.
 
 There is no `Nat` parameter, no complexity expression, and no verdict.
 The runner does one warmup call, then `repeats` measured calls, and

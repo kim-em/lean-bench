@@ -325,6 +325,14 @@ things to watch for:
   be slower than the rest. Reading the median rather than the mean
   defends against this naturally; raise `repeats` if min/max
   spread on your hardware is too wide for a 5-sample median.
+- **Closed pure expressions get folded into compile-time
+  constants.** Bare `def f : α := <expr>` registrations are
+  rejected at elaboration (issue #54); the macro requires a
+  callable shape (`Unit → α`, `Unit → IO α`, or `IO α`). Even
+  these can fold if the body is closed — the reliable mitigation
+  is to thread inputs through runtime state (`IO.Ref`, disk, CLI
+  argument). The report appends a `‼` advisory whenever the
+  median wall time is below 1 µs.
 
 ## Summary
 
