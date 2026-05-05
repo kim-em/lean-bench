@@ -1,5 +1,7 @@
 # lean-bench
 
+Documentation: <https://kim-em.github.io/lean-bench/>
+
 Microbenchmark library for Lean 4. Declare a benchmark and the
 complexity model you expect; run it; the harness reports per-call
 times across an adaptive parameter ladder and the ratio
