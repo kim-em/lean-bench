@@ -210,7 +210,7 @@ fully opt-in.
 Fixed benchmarks support tags too:
 
 ```lean
-def heavyComputation : Nat := 42
+def heavyComputation : Unit → Nat := fun () => 42
 
 setup_fixed_benchmark heavyComputation where {
   tags := #["regression"]
@@ -681,10 +681,12 @@ the workload reads input from disk or shells out to an external
 tool):
 
 ```lean
-def factorXOverFTwo : Nat := 42  -- in real code: a single hard problem
+-- in real code: a single hard problem
+def factorXOverFTwo : Unit → Nat := fun () => 42
 setup_fixed_benchmark factorXOverFTwo
 
-def runFplll : IO Nat := pure 42  -- in real code: shell out to an external tool
+-- in real code: shell out to an external tool
+def runFplll : IO Nat := pure 42
 setup_fixed_benchmark runFplll where {
   repeats := 10
   maxSecondsPerCall := 30.0
