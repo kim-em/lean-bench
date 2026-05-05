@@ -234,6 +234,26 @@ def testCanonicalKeyConstants : IO UInt32 := do
     (okCommon ∧ okParametric ∧ okFixed ∧ okOptCommon ∧
      okOptParametric ∧ okEnvKeys ∧ okStatus ∧ okVersion ∧ okKindStrings)
 
+def testParseHexU64 : IO UInt32 := do
+  let succeededWith (input : String) (expected : UInt64) : Bool :=
+    match Schema.parseHexU64 input with
+    | .ok actual => actual == expected
+    | .error _ => false
+  let failed (r : Except String UInt64) : Bool :=
+    match r with
+    | .error _ => true
+    | .ok _ => false
+  let valid :=
+    succeededWith "0xdeadBEEF" 0xdeadbeef &&
+    succeededWith "0XCAFEBABE" 0xcafebabe &&
+    succeededWith "0xffffffffffffffff" 0xffffffffffffffff
+  let invalid :=
+    failed (Schema.parseHexU64 "deadbeef") &&
+    failed (Schema.parseHexU64 "0x") &&
+    failed (Schema.parseHexU64 "0xdeadbeeg") &&
+    failed (Schema.parseHexU64 "0x10000000000000000")
+  expect "parseHexU64 strict contract" (valid && invalid)
+
 /-! ## Env capture (issue #11)
 
 Exercise `RunEnv.capture` directly so the round-trip "capture →
@@ -591,6 +611,7 @@ def testParseTolerantToMemoryNulls : IO UInt32 := do
 def runTests : IO UInt32 := do
   for (label, t) in
     [ ("canonicalKeyConstants",      testCanonicalKeyConstants)
+    , ("parseHexU64",                testParseHexU64)
     , ("env.captureKeyset",          testRunEnvCaptureKeyset)
     , ("env.alwaysPresent",          testRunEnvAlwaysPresentFields)
     , ("env.nullsForMissing",        testRunEnvNullsForMissing)
@@ -631,4 +652,5 @@ def runTests : IO UInt32 := do
 def main (args : List String) : IO UInt32 :=
   match args with
   | "_child" :: _ => LeanBench.Cli.dispatch args
+  | "_probe_floor" :: _ => LeanBench.Cli.dispatch args
   | _ => runTests

@@ -344,7 +344,6 @@ def runVerifyCmd (p : Cli.Parsed) : IO UInt32 := do
 /-! ## Subcommand handler (child side) -/
 
 def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
-  let benchStr := (p.flag! "bench").as! String
   let env? : Option LeanBench.Env :=
     match parsedFlag? p "env-json" String with
     | none => none
@@ -355,6 +354,7 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
         match LeanBench.RunEnv.fromJson j with
         | .ok env => some env
         | .error _ => none
+  let benchStr := (p.flag! "bench").as! String
   if p.hasFlag "fixed" then
     let repeatIdx : Nat :=
       match parsedFlag? p "repeat-index" Nat with
@@ -367,6 +367,19 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
     let cacheMode : CacheMode :=
       (parsedFlag? p "cache-mode" LeanBench.CacheMode).getD .warm
     LeanBench.runChildMode benchStr.toName param targetNanos cacheMode env?
+
+def runProbeFloorCmd (p : Cli.Parsed) : IO UInt32 := do
+  let env? : Option LeanBench.Env :=
+    match parsedFlag? p "env-json" String with
+    | none => none
+    | some s =>
+      match Lean.Json.parse s with
+      | .error _ => none
+      | .ok j =>
+        match LeanBench.RunEnv.fromJson j with
+        | .ok env => some env
+        | .error _ => none
+  LeanBench.runProbeFloorMode env?
 
 end Cli
 end LeanBench

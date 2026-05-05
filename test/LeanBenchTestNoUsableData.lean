@@ -221,4 +221,5 @@ end LeanBench.Test.NoUsableData
 def main (args : List String) : IO UInt32 :=
   match args with
   | "_child" :: _ => LeanBench.Cli.dispatch args
+  | "_probe_floor" :: _ => LeanBench.Cli.dispatch args
   | _ => LeanBench.Test.NoUsableData.runTests

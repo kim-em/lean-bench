@@ -125,6 +125,9 @@ def paramScheduleToJson : ParamSchedule -> Json
   | .auto         => jStr "auto"
 
 def dataPointToJson (dp : DataPoint) : Json :=
+  let errorJson : Json := match dp.status with
+    | .error msg => jStr msg
+    | _ => Json.null
   Json.mkObj [
     ("param",             jNat dp.param),
     ("per_call_nanos",    jFloat dp.perCallNanos),
@@ -132,6 +135,7 @@ def dataPointToJson (dp : DataPoint) : Json :=
     ("inner_repeats",     jNat dp.innerRepeats),
     ("status",            jStr (statusToString dp.status)),
     ("result_hash",       jOptHash dp.resultHash),
+    ("error",             errorJson),
     ("trial_index",       jNat dp.trialIndex),
     ("part_of_verdict",   jBool dp.partOfVerdict),
     ("below_signal_floor", jBool dp.belowSignalFloor),
@@ -140,11 +144,15 @@ def dataPointToJson (dp : DataPoint) : Json :=
   ]
 
 def fixedDataPointToJson (dp : FixedDataPoint) : Json :=
+  let errorJson : Json := match dp.status with
+    | .error msg => jStr msg
+    | _ => Json.null
   Json.mkObj [
     ("repeat_index", jNat dp.repeatIndex),
     ("total_nanos",  jNat dp.totalNanos),
     ("status",       jStr (statusToString dp.status)),
     ("result_hash",  jOptHash dp.resultHash),
+    ("error",        errorJson),
     ("alloc_bytes",  jOptNat dp.allocBytes),
     ("peak_rss_kb",  jOptNat dp.peakRssKb)
   ]
@@ -248,12 +256,12 @@ def budgetSummaryToJson
 
 /-! ## Deserialization: JSON -> types -/
 
-private def parseStatus (s : String) : Status :=
+private def parseStatus (s : String) (errorMsg? : Option String := none) : Status :=
   match s with
   | "ok"            => .ok
   | "timed_out"     => .timedOut
   | "killed_at_cap" => .killedAtCap
-  | "error"         => .error ""
+  | "error"         => .error (errorMsg?.getD "")
   | other           => .error s!"unknown status: {other}"
 
 private def parseVerdict (s : String) : Verdict :=
@@ -290,147 +298,189 @@ private def getBool (j : Json) (k : String) (default : Bool := false) : Bool :=
 private def getStr (j : Json) (k : String) (default : String := "") : String :=
   (getOptStr j k).getD default
 
-def dataPointFromJson (j : Json) : DataPoint :=
-  let hashStr := getOptStr j "result_hash"
-  let resultHash : Option UInt64 := hashStr.bind Schema.parseHexU64
-  { param            := getNat j "param"
-    perCallNanos     := getFloat j "per_call_nanos"
-    totalNanos       := getNat j "total_nanos"
-    innerRepeats     := getNat j "inner_repeats"
-    status           := parseStatus (getStr j "status")
-    resultHash       := resultHash
+private def requireNatField (j : Json) (k : String) : Except String Nat :=
+  match j.getObjValAs? Nat k with
+  | .ok v => .ok v
+  | .error e => .error s!"invalid or missing `{k}`: {e}"
+
+private def requireFloatField (j : Json) (k : String) : Except String Float :=
+  match j.getObjValAs? Float k with
+  | .ok v => .ok v
+  | .error e => .error s!"invalid or missing `{k}`: {e}"
+
+private def requireBoolField (j : Json) (k : String) : Except String Bool :=
+  match j.getObjValAs? Bool k with
+  | .ok v => .ok v
+  | .error e => .error s!"invalid or missing `{k}`: {e}"
+
+private def requireStringField (j : Json) (k : String) : Except String String :=
+  match j.getObjValAs? String k with
+  | .ok v => .ok v
+  | .error e => .error s!"invalid or missing `{k}`: {e}"
+
+private def optionalHashFromJson (j : Json) (k : String) :
+    Except String (Option UInt64) := do
+  match j.getObjVal? k with
+  | .error _ => return none
+  | .ok .null => return none
+  | .ok (.str s) => return some (← Schema.parseHexU64 s)
+  | .ok _ => .error s!"invalid `{k}`: expected hex string or null"
+
+private def requireObjVal (j : Json) (k : String) : Except String Json :=
+  match j.getObjVal? k with
+  | .ok v => .ok v
+  | .error e => .error s!"missing `{k}`: {e}"
+
+private def requireArrayField (j : Json) (k : String) : Except String (Array Json) := do
+  match ← requireObjVal j k with
+  | .arr xs => return xs
+  | _ => .error s!"invalid `{k}`: expected array"
+
+def dataPointFromJson (j : Json) : Except String DataPoint := do
+  let param ← requireNatField j "param"
+  let perCallNanos ← requireFloatField j "per_call_nanos"
+  let totalNanos ← requireNatField j "total_nanos"
+  let innerRepeats ← requireNatField j "inner_repeats"
+  let statusStr ← requireStringField j "status"
+  let errorMsg? := getOptStr j "error"
+  let resultHash ← optionalHashFromJson j "result_hash"
+  return {
+    param
+    perCallNanos
+    totalNanos
+    innerRepeats
+    status           := parseStatus statusStr errorMsg?
+    resultHash
     trialIndex       := getNat j "trial_index"
     partOfVerdict    := getBool j "part_of_verdict" true
     belowSignalFloor := getBool j "below_signal_floor"
     allocBytes       := getOptNat j "alloc_bytes"
     peakRssKb        := getOptNat j "peak_rss_kb" }
 
-def fixedDataPointFromJson (j : Json) : FixedDataPoint :=
-  let hashStr := getOptStr j "result_hash"
-  let resultHash : Option UInt64 := hashStr.bind Schema.parseHexU64
-  { repeatIndex := getNat j "repeat_index"
-    totalNanos  := getNat j "total_nanos"
-    status      := parseStatus (getStr j "status")
-    resultHash  := resultHash
+def fixedDataPointFromJson (j : Json) : Except String FixedDataPoint := do
+  let repeatIndex ← requireNatField j "repeat_index"
+  let totalNanos ← requireNatField j "total_nanos"
+  let statusStr ← requireStringField j "status"
+  let errorMsg? := getOptStr j "error"
+  let resultHash ← optionalHashFromJson j "result_hash"
+  return {
+    repeatIndex
+    totalNanos
+    status      := parseStatus statusStr errorMsg?
+    resultHash
     allocBytes  := getOptNat j "alloc_bytes"
     peakRssKb   := getOptNat j "peak_rss_kb" }
 
-private def parseParamSchedule (j : Json) (k : String) : ParamSchedule :=
-  match j.getObjVal? k with
-  | .ok (.str "doubling") => .doubling
-  | .ok (.str "auto") => .auto
-  | .ok obj =>
-    let kind := getStr obj "kind" "auto"
+private def parseParamSchedule (j : Json) (k : String) : Except String ParamSchedule := do
+  match ← requireObjVal j k with
+  | .str "doubling" => return .doubling
+  | .str "auto" => return .auto
+  | obj@(.obj _) =>
+    let kind := getStr obj "kind" ""
     match kind with
-    | "linear" => .linear (getNat obj "samples" 16)
+    | "linear" => return .linear (← requireNatField obj "samples")
     | "custom" =>
-      match obj.getObjVal? "params" with
-      | .ok (.arr ps) =>
-        let params := ps.filterMap fun p =>
-          match p with
-          | .num n => some n.toFloat.toUInt64.toNat
-          | _ => none
-        .custom params
-      | _ => .auto
-    | _ => .auto
-  | .error _ => .auto
+      let ps ← requireArrayField obj "params"
+      let params ← ps.mapM fun p =>
+        match p with
+        | .num n => .ok (n.toFloat.toUInt64.toNat)
+        | _ => .error "invalid `params`: expected array of integers"
+      return .custom params
+    | other => .error s!"invalid `{k}` kind: {other}"
+  | _ => .error s!"invalid `{k}`: expected string or object"
 
-def benchmarkConfigFromJson (j : Json) : BenchmarkConfig :=
-  { maxSecondsPerCall     := getFloat j "max_seconds_per_call" 1.0
-    targetInnerNanos      := getNat j "target_inner_nanos" 500_000_000
-    paramCeiling          := getNat j "param_ceiling" 1_073_741_824
-    paramFloor            := getNat j "param_floor"
-    verdictWarmupFraction := getFloat j "verdict_warmup_fraction" 0.2
-    slopeTolerance        := getFloat j "slope_tolerance" 0.15
-    narrowRangeNoiseFloor := getFloat j "narrow_range_noise_floor" 1.50
-    signalFloorMultiplier := getFloat j "signal_floor_multiplier" 10.0
-    cacheMode             := parseCacheMode (getStr j "cache_mode" "warm")
-    paramSchedule         := parseParamSchedule j "param_schedule"
-    outerTrials           := getNat j "outer_trials" 1 }
+def benchmarkConfigFromJson (j : Json) : Except String BenchmarkConfig := do
+  return {
+    maxSecondsPerCall     := ← requireFloatField j "max_seconds_per_call"
+    targetInnerNanos      := ← requireNatField j "target_inner_nanos"
+    paramCeiling          := ← requireNatField j "param_ceiling"
+    paramFloor            := ← requireNatField j "param_floor"
+    verdictWarmupFraction := ← requireFloatField j "verdict_warmup_fraction"
+    slopeTolerance        := ← requireFloatField j "slope_tolerance"
+    narrowRangeNoiseFloor := ← requireFloatField j "narrow_range_noise_floor"
+    signalFloorMultiplier := ← requireFloatField j "signal_floor_multiplier"
+    cacheMode             := parseCacheMode (← requireStringField j "cache_mode")
+    paramSchedule         := ← parseParamSchedule j "param_schedule"
+    outerTrials           := ← requireNatField j "outer_trials" }
 
-def fixedBenchmarkConfigFromJson (j : Json) : FixedBenchmarkConfig :=
-  { repeats           := getNat j "repeats" 5
-    maxSecondsPerCall := getFloat j "max_seconds_per_call" 60.0
-    warmup            := getBool j "warmup" true }
+def fixedBenchmarkConfigFromJson (j : Json) : Except String FixedBenchmarkConfig := do
+  return {
+    repeats           := ← requireNatField j "repeats"
+    maxSecondsPerCall := ← requireFloatField j "max_seconds_per_call"
+    warmup            := ← requireBoolField j "warmup" }
 
-def trialSummaryFromJson (j : Json) : TrialSummary :=
-  { param              := getNat j "param"
-    okCount            := getNat j "ok_count"
-    medianPerCallNanos := getFloat j "median_per_call_nanos"
-    minPerCallNanos    := getFloat j "min_per_call_nanos"
-    maxPerCallNanos    := getFloat j "max_per_call_nanos"
-    relativeSpread     := getFloat j "relative_spread" }
+def trialSummaryFromJson (j : Json) : Except String TrialSummary := do
+  return {
+    param              := ← requireNatField j "param"
+    okCount            := ← requireNatField j "ok_count"
+    medianPerCallNanos := ← requireFloatField j "median_per_call_nanos"
+    minPerCallNanos    := ← requireFloatField j "min_per_call_nanos"
+    maxPerCallNanos    := ← requireFloatField j "max_per_call_nanos"
+    relativeSpread     := ← requireFloatField j "relative_spread" }
 
-def ratioFromJson (j : Json) : Option Ratio :=
+def ratioFromJson (j : Json) : Except String Ratio := do
   match j with
   | .arr #[p, c] =>
     match p, c with
-    | .num pn, .num cn => some (pn.toFloat.toUInt64.toNat, cn.toFloat)
-    | _, _ => none
-  | _ => none
+    | .num pn, .num cn => .ok (pn.toFloat.toUInt64.toNat, cn.toFloat)
+    | _, _ => .error "invalid ratio entry: expected [nat, float]"
+  | _ => .error "invalid ratio entry: expected two-element array"
 
-private def envFromJson? (j : Json) (k : String) : Option Env :=
+private def envFromJson? (j : Json) (k : String) : Except String (Option Env) :=
   match j.getObjVal? k with
-  | .ok (.null) => none
+  | .error _ => .ok none
+  | .ok (.null) => .ok none
   | .ok envJson =>
     match RunEnv.fromJson envJson with
-    | .ok env => some env
-    | .error _ => none
-  | .error _ => none
+    | .ok env => .ok (some env)
+    | .error e => .error s!"invalid `{k}`: {e}"
 
 def benchmarkResultFromJson (j : Json) : Except String BenchmarkResult := do
-  let function := (getStr j "function").toName
-  let configJson := match j.getObjVal? "config" with
-    | .ok c => c | .error _ => Json.null
-  let pointsArr := match j.getObjVal? "points" with
-    | .ok (.arr ps) => ps | _ => #[]
-  let ratiosArr := match j.getObjVal? "ratios" with
-    | .ok (.arr rs) => rs | _ => #[]
-  let advisoriesArr := match j.getObjVal? "advisories" with
-    | .ok (.arr as_) => as_ | _ => #[]
-  let trialSummariesArr := match j.getObjVal? "trial_summaries" with
-    | .ok (.arr ts) => ts | _ => #[]
-  let points := pointsArr.map dataPointFromJson
-  let ratios := ratiosArr.filterMap ratioFromJson
-  let trialSummaries := trialSummariesArr.map trialSummaryFromJson
-  let _ := advisoriesArr  -- advisories are informational, not round-tripped to enum
+  let function := (← requireStringField j "function").toName
+  let configJson ← requireObjVal j "config"
+  let pointsArr ← requireArrayField j "points"
+  let ratiosArr ← requireArrayField j "ratios"
+  let advisoriesArr ← requireArrayField j "advisories"
+  let trialSummariesArr ← requireArrayField j "trial_summaries"
+  let points ← pointsArr.mapM dataPointFromJson
+  let ratios ← ratiosArr.mapM ratioFromJson
+  let trialSummaries ← trialSummariesArr.mapM trialSummaryFromJson
+  let _ := advisoriesArr
   return {
     function
-    complexityFormula := getStr j "complexity_formula"
-    hashable          := getBool j "hashable"
-    config            := benchmarkConfigFromJson configJson
+    complexityFormula := ← requireStringField j "complexity_formula"
+    hashable          := ← requireBoolField j "hashable"
+    config            := ← benchmarkConfigFromJson configJson
     points
     ratios
-    verdict           := parseVerdict (getStr j "verdict")
+    verdict           := parseVerdict (← requireStringField j "verdict")
     cMin?             := getOptFloat j "c_min"
     cMax?             := getOptFloat j "c_max"
     slope?            := getOptFloat j "slope"
-    verdictDroppedLeading := getNat j "verdict_dropped_leading"
+    verdictDroppedLeading := ← requireNatField j "verdict_dropped_leading"
     spawnFloorNanos?  := getOptNat j "spawn_floor_nanos"
     advisories        := #[]   -- not round-tripped; informational
     trialSummaries    := trialSummaries
-    budgetTruncated   := getBool j "budget_truncated"
-    env?              := envFromJson? j "env"
+    budgetTruncated   := ← requireBoolField j "budget_truncated"
+    env?              := ← envFromJson? j "env"
   }
 
 def fixedResultFromJson (j : Json) : Except String FixedResult := do
-  let function := (getStr j "function").toName
-  let configJson := match j.getObjVal? "config" with
-    | .ok c => c | .error _ => Json.null
-  let pointsArr := match j.getObjVal? "points" with
-    | .ok (.arr ps) => ps | _ => #[]
-  let points := pointsArr.map fixedDataPointFromJson
+  let function := (← requireStringField j "function").toName
+  let configJson ← requireObjVal j "config"
+  let pointsArr ← requireArrayField j "points"
+  let points ← pointsArr.mapM fixedDataPointFromJson
   return {
     function
-    hashable     := getBool j "hashable"
-    config       := fixedBenchmarkConfigFromJson configJson
+    hashable     := ← requireBoolField j "hashable"
+    config       := ← fixedBenchmarkConfigFromJson configJson
     points
     medianNanos? := getOptNat j "median_nanos"
     minNanos?    := getOptNat j "min_nanos"
     maxNanos?    := getOptNat j "max_nanos"
     hashesAgree  := getBool j "hashes_agree" true
-    budgetTruncated := getBool j "budget_truncated"
-    env?         := envFromJson? j "env"
+    budgetTruncated := ← requireBoolField j "budget_truncated"
+    env?         := ← envFromJson? j "env"
   }
 
 /-- Parse the results array from an export document. Returns
@@ -459,10 +509,9 @@ def loadBaseline (path : System.FilePath) :
   let contents ← IO.FS.readFile path
   let json ← IO.ofExcept (Json.parse contents)
   IO.ofExcept (checkExportVersion json)
-  let resultsArr := match json.getObjVal? "results" with
-    | .ok (.arr rs) => rs | _ => #[]
+  let resultsArr ← IO.ofExcept (requireArrayField json "results")
   let (parametric, fixed) ← IO.ofExcept (parseResults resultsArr)
-  let env? := envFromJson? json "env"
+  let env? ← IO.ofExcept (envFromJson? json "env")
   return (parametric, fixed, env?)
 
 /-! ## Baseline comparison -/

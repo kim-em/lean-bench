@@ -100,10 +100,13 @@ def parseChildRow (line : String) : Except String DataPoint := do
     match json.getObjValAs? Float "per_call_nanos" with
     | .ok x => x
     | .error _ => totalNanos.toFloat / (max 1 innerRepeats).toFloat
-  let resultHash : Option UInt64 :=
-    match json.getObjVal? "result_hash" with
-    | .ok (.str s) => Schema.parseHexU64 s
-    | _ => none
+  let parseOptionalHash (j : Json) : Except String (Option UInt64) := do
+    match j.getObjVal? "result_hash" with
+    | .ok (.str s) => return some (← Schema.parseHexU64 s)
+    | .ok .null => return none
+    | .ok _ => throw s!"result_hash must be a hex string or null"
+    | .error _ => return none
+  let resultHash ← parseOptionalHash json
   let statusStr ← json.getObjValAs? String "status"
   let status : Status := match statusStr with
     | "ok" => .ok
@@ -242,6 +245,27 @@ def runOneBatch (spec : BenchmarkSpec) (param : Nat) (env? : Option Env := none)
   ] env?
   let (exit, stdout, stderrText, wasKilled) ← spawnWithCap exe args deadlineMs
   return classifyChildOutcome param exit stdout stderrText wasKilled
+
+/-- Clamp the child's inner-tuning target against the measured
+    per-spawn floor and the wallclock cap. On slow-starting hosts a
+    full `targetInnerNanos := 500ms` batch inside a `0.5s` cap leaves
+    no room for process startup, so the child gets killed before
+    emitting its first row. We reserve the measured spawn floor first,
+    then spend at most a quarter of the remaining budget on inner work
+    so the autotuner still has headroom for probe/jump overhead and row
+    emission on slow runners. -/
+private def effectiveTargetInnerNanos (cfg : BenchmarkConfig)
+    (spawnFloorNanos? : Option Nat) : Nat :=
+  match spawnFloorNanos? with
+  | none => cfg.targetInnerNanos
+  | some floor =>
+    let deadlineNanos : Nat :=
+      ((cfg.maxSecondsPerCall * 1.0e9) + cfg.killGraceMs.toFloat * 1.0e6).toUInt64.toNat
+    if floor >= deadlineNanos then
+      max 1 (min cfg.targetInnerNanos (deadlineNanos / 8))
+    else
+      let remaining := deadlineNanos - floor
+      max 1 (min cfg.targetInnerNanos (remaining / 4))
 
 /-- Doubling ladder from floor through ceiling. -/
 def paramLadder (cfg : BenchmarkConfig) : Array Nat := Id.run do
@@ -490,19 +514,11 @@ def annotateBelowSignalFloor (multiplier : Float)
     single iteration and the wallclock is dominated by spawn /
     process-init / IPC, which is exactly what we want to report. -/
 def measureSpawnFloor (env : Env) : IO (Option Nat) := do
-  let entries ← allRuntimeEntries
-  if entries.isEmpty then return none
-  let entry := entries[0]!
-  let probeCfg : BenchmarkConfig :=
-    { entry.spec.config with
-        targetInnerNanos := 1_000
-        cacheMode := .warm }
+  let exe ← ownExe
+  let args := withEnvArg #["_probe_floor"] (some env)
+  let deadlineMs : UInt32 := 1000
   let t₀ ← IO.monoNanosNow
-  -- Pass parent's env along so the probe child takes the same fast
-  -- path as a real ladder rung; otherwise the floor measurement is
-  -- inflated by the env-capture subprocesses (git / hostname /
-  -- /proc/cpuinfo) that real rungs skip.
-  let _ ← runOneBatch { entry.spec with config := probeCfg } 0 (some env)
+  let _ ← spawnWithCap exe args deadlineMs
   let t₁ ← IO.monoNanosNow
   return some (t₁ - t₀)
 
@@ -557,7 +573,10 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
   -- `--env-json` so all JSONL rows in this run stamp identical env.
   -- Saves ~3 subprocess spawns per ladder rung (issue #11).
   let env ← RunEnv.capture
-  let spec := { entry.spec with config := cfg }
+  let spawnFloor ← measureSpawnFloor env
+  let execCfg :=
+    { cfg with targetInnerNanos := effectiveTargetInnerNanos cfg spawnFloor }
+  let spec := { entry.spec with config := execCfg }
   let schedule := resolveSchedule cfg entry.complexity
   let mut points : Array DataPoint := #[]
   let mut budgetTruncated := false
@@ -618,7 +637,6 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
         let (topped, cut) ← topUpDoublingTrials spec env points deadline?
         points := topped
         if cut then budgetTruncated := true
-  let spawnFloor ← measureSpawnFloor env
   -- Annotate below-floor BEFORE summarising; verdict ratios and the
   -- advisory list must see the same filtered view.
   let annotated :=
@@ -640,10 +658,13 @@ def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
   let _ ← json.getObjValAs? String "function"
   let repeatIndex ← json.getObjValAs? Nat "repeat_index"
   let totalNanos ← json.getObjValAs? Nat "total_nanos"
-  let resultHash : Option UInt64 :=
-    match json.getObjVal? "result_hash" with
-    | .ok (.str s) => Schema.parseHexU64 s
-    | _ => none
+  let parseOptionalHash (j : Json) : Except String (Option UInt64) := do
+    match j.getObjVal? "result_hash" with
+    | .ok (.str s) => return some (← Schema.parseHexU64 s)
+    | .ok .null => return none
+    | .ok _ => throw s!"result_hash must be a hex string or null"
+    | .error _ => return none
+  let resultHash ← parseOptionalHash json
   let statusStr ← json.getObjValAs? String "status"
   let status : Status := match statusStr with
     | "ok" => .ok

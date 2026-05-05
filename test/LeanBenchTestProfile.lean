@@ -192,5 +192,6 @@ def runTests : IO UInt32 := do
 def main (args : List String) : IO UInt32 :=
   match args with
   | "_child" :: _ => LeanBench.Cli.dispatch args
+  | "_probe_floor" :: _ => LeanBench.Cli.dispatch args
   | "profile" :: _ => LeanBench.Cli.dispatch args
   | _ => runTests
