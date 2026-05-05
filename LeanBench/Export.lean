@@ -259,34 +259,6 @@ def budgetSummaryToJson
     ("skipped",         Json.arr skippedJson)
   ]
 
-/-- Build the top-level export JSON document. -/
-def toJson
-    (parametric : Array BenchmarkResult)
-    (fixed : Array FixedResult)
-    (env? : Option Env := none) :
-    Json :=
-  let results : Array Json :=
-    (parametric.map benchmarkResultToJson) ++
-    (fixed.map fixedResultToJson)
-  Json.mkObj [
-    ("export_schema_version", jNat exportSchemaVersion),
-    ("lean_bench_version",    jStr libraryVersion),
-    ("env",                   match env? with
-                              | some env => RunEnv.toJson env
-                              | none     => Json.null),
-    ("results",               Json.arr results)
-  ]
-
-/-- Write the export document to a file (pretty-printed). -/
-def exportToFile
-    (path : System.FilePath)
-    (parametric : Array BenchmarkResult)
-    (fixed : Array FixedResult)
-    (env? : Option Env := none) :
-    IO Unit := do
-  let json := toJson parametric fixed env?
-  IO.FS.writeFile path (json.pretty ++ "\n")
-
 /-! ## Deserialization: JSON -> types -/
 
 private def parseStatus (s : String) : Status :=
@@ -805,6 +777,16 @@ def toJsonWithBaseline
     | some b => withBaseline ++ [("budget", b)]
     | none   => withBaseline
   Json.mkObj allFields
+
+/-- Write the export document to a file (pretty-printed). -/
+def exportToFile
+    (path : System.FilePath)
+    (parametric : Array BenchmarkResult)
+    (fixed : Array FixedResult)
+    (env? : Option Env := none) :
+    IO Unit := do
+  let json := toJsonWithBaseline parametric fixed env?
+  IO.FS.writeFile path (json.pretty ++ "\n")
 
 end Export
 end LeanBench

@@ -154,7 +154,7 @@ def testFormatterFailure : IO UInt32 := do
   unless stringContains line "child error" do
     IO.eprintln s!"expected failure message, got: {line}"
     return 1
-  let summary := Format.fmtVerify #[failingReport]
+  let summary := Format.fmtCombinedVerify { parametric := #[failingReport], fixed := #[] }
   unless stringContains summary "1 of 1" do
     IO.eprintln s!"expected '1 of 1' summary, got: {summary}"
     return 1

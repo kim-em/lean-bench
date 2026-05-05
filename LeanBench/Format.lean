@@ -705,20 +705,6 @@ def fmtVerifyReport (r : VerifyReport) : String :=
     let body := failures.toList.map (fun msg => s!"         —  {msg}")
     "\n".intercalate (header :: body)
 
-/-- Render the full verify summary for a list of reports. -/
-def fmtVerify (reports : Array VerifyReport) : String := Id.run do
-  if reports.isEmpty then
-    return "(no benchmarks registered)"
-  let mut lines : Array String := #[s!"verifying {reports.size} benchmark(s)..."]
-  for r in reports do
-    lines := lines.push (fmtVerifyReport r)
-  let failed := reports.filter (! ·.passed) |>.size
-  let summary :=
-    if failed == 0 then s!"all {reports.size} benchmark(s) passed"
-    else s!"{failed} of {reports.size} benchmark(s) failed verification"
-  lines := lines.push summary
-  return "\n".intercalate lines.toList
-
 /-- Render one fixed-benchmark verify report. Same shape as
     `fmtVerifyReport`. -/
 def fmtFixedVerifyReport (r : FixedVerifyReport) : String :=
