@@ -211,7 +211,7 @@ def testCanonicalKeyConstants : IO UInt32 := do
   let okParametric :=
     Schema.requiredParametricKeys == #["param", "inner_repeats"]
   let okFixed :=
-    Schema.requiredFixedKeys == #["repeat_index"]
+    Schema.requiredFixedKeys == #["repeat_index", "inner_repeats"]
   let okOptCommon :=
     Schema.optionalCommonKeys ==
       #["result_hash", "error", "env", "alloc_bytes", "peak_rss_kb"]
@@ -399,7 +399,8 @@ def testParseRejectsFutureVersion : IO UInt32 := do
 def testFixedParseAcceptsExtraKey : IO UInt32 := do
   let row :=
     "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-    "\"repeat_index\":0,\"total_nanos\":1234567,\"result_hash\":\"0xcafe\"," ++
+    "\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1234567," ++
+    "\"result_hash\":\"0xcafe\"," ++
     "\"status\":\"ok\",\"error\":null,\"alloc_bytes\":42}"
   match parseFixedChildRow row with
   | .error e =>
@@ -412,7 +413,7 @@ def testFixedParseAcceptsExtraKey : IO UInt32 := do
 def testFixedParseRejectsFutureVersion : IO UInt32 := do
   let row :=
     "{\"schema_version\":42,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-    "\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
+    "\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"}"
   match parseFixedChildRow row with
   | .ok dp =>
     IO.eprintln s!"expected fixed future-version row to fail, got {repr dp}"
@@ -421,11 +422,11 @@ def testFixedParseRejectsFutureVersion : IO UInt32 := do
     expect s!"fixed future-version mentions '42': {msg}" (containsSub msg "42")
 
 def testFixedParseAcceptsMissingOptional : IO UInt32 := do
-  -- Drop `result_hash` and `error`. `kind` stays — fixed parser
-  -- requires it to discriminate from a misrouted parametric row.
+  -- Drop `result_hash` and `error`. `kind`, `inner_repeats` stay
+  -- — both are required for the fixed parser.
   let row :=
     "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-    "\"repeat_index\":2,\"total_nanos\":99,\"status\":\"ok\"}"
+    "\"repeat_index\":2,\"inner_repeats\":1,\"total_nanos\":99,\"status\":\"ok\"}"
   match parseFixedChildRow row with
   | .error e =>
     IO.eprintln s!"fixed missing-optional row failed: {e}"
@@ -472,7 +473,7 @@ private def baseValidParametricRow : String :=
 
 private def baseValidFixedRow : String :=
   "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-  "\"repeat_index\":0,\"total_nanos\":1,\"result_hash\":null," ++
+  "\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"result_hash\":null," ++
   "\"status\":\"ok\",\"error\":null}"
 
 def testParseRejectsExplicitOldVersion : IO UInt32 :=
@@ -487,12 +488,12 @@ def testParseRejectsMissingVersion : IO UInt32 :=
 
 def testFixedParseRejectsExplicitOldVersion : IO UInt32 :=
   expectFixedParseError
-    "{\"schema_version\":0,\"kind\":\"fixed\",\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
+    "{\"schema_version\":0,\"kind\":\"fixed\",\"function\":\"foo.bar\",\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"}"
     "0" "fixed.explicitOldVersion"
 
 def testFixedParseRejectsMissingVersion : IO UInt32 :=
   expectFixedParseError
-    "{\"kind\":\"fixed\",\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
+    "{\"kind\":\"fixed\",\"function\":\"foo.bar\",\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"}"
     "schema_version" "fixed.missingVersion"
 
 def testParseRejectsWrongKind : IO UInt32 :=
@@ -505,13 +506,13 @@ def testFixedParseRejectsWrongKind : IO UInt32 :=
   -- Symmetric: `kind:"parametric"` (or missing, which defaults to
   -- parametric) must not parse via the fixed parser.
   expectFixedParseError
-    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\",\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"}"
     "kind" "fixed.wrongKind"
 
 def testFixedParseRejectsMissingKind : IO UInt32 :=
   -- Missing `kind` is rejected on both parsers.
   expectFixedParseError
-    "{\"schema_version\":1,\"function\":\"foo.bar\",\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"}"
+    "{\"schema_version\":1,\"function\":\"foo.bar\",\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"}"
     "kind" "fixed.missingKind"
 
 /-- Drop each required field individually from a known-good
@@ -542,6 +543,7 @@ def testFixedParseRejectsMissingRequired : IO UInt32 := do
   let droppers : List (String × String) :=
     [ ("\"function\":\"foo.bar\",", "function")
     , ("\"repeat_index\":0,",       "repeat_index")
+    , ("\"inner_repeats\":1,",      "inner_repeats")
     , ("\"total_nanos\":1,",        "total_nanos")
     , ("\"status\":\"ok\",",        "status") ]
   for (substr, fieldName) in droppers do
@@ -580,7 +582,7 @@ def testParseAcceptsMemoryMetrics : IO UInt32 := do
 def testFixedParseAcceptsMemoryMetrics : IO UInt32 := do
   let row :=
     "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-    "\"repeat_index\":0,\"total_nanos\":1,\"status\":\"ok\"," ++
+    "\"repeat_index\":0,\"inner_repeats\":1,\"total_nanos\":1,\"status\":\"ok\"," ++
     "\"alloc_bytes\":42,\"peak_rss_kb\":100}"
   match parseFixedChildRow row with
   | .error e =>

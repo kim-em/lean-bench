@@ -568,17 +568,24 @@ def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.
     if includeEnv then
       lines := lines.push s!"  env: {RunEnv.fmtConcise env}"
   | none => pure ()
+  -- Auto-tune (issue #58) means each row's `totalNanos` covers
+  -- `innerRepeats` iterations; display per-call so the user reads
+  -- the actual cost of one invocation, then surface the batch total
+  -- and chosen N alongside.
+  let perCallNanos (dp : FixedDataPoint) : Nat :=
+    let n := if dp.innerRepeats == 0 then 1 else dp.innerRepeats
+    dp.totalNanos / n
   let mut idx : Nat := 0
   let nums := r.points.map fun dp =>
     match dp.status with
     | .ok =>
-      let (n, _) := fmtNanos dp.totalNanos
+      let (n, _) := fmtNanos (perCallNanos dp)
       n
     | _ => "—"
   let aligned := alignDecimals nums
   let units := r.points.map fun dp =>
     match dp.status with
-    | .ok => (fmtNanos dp.totalNanos).2
+    | .ok => (fmtNanos (perCallNanos dp)).2
     | _ => ""
   let wUnit := units.foldl (fun m u => max m u.length) 0
   for dp in r.points do
@@ -590,7 +597,16 @@ def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.
     let num := aligned[idx]!
     let unit := units[idx]!
     let perCall := num ++ " " ++ rightpad unit wUnit
-    lines := lines.push s!"  repeat {idx}  {perCall}{suffix}"
+    -- Show the auto-tuned count and batch total when N > 1 so the
+    -- raw measurement is visible behind the per-call computation.
+    let repeatsTag : String :=
+      match dp.status with
+      | .ok =>
+        if dp.innerRepeats > 1 then
+          s!"  ({fmtRepeats dp.innerRepeats}, total {fmtNanosStr dp.totalNanos})"
+        else ""
+      | _ => ""
+    lines := lines.push s!"  repeat {idx}  {perCall}{repeatsTag}{suffix}"
     idx := idx + 1
   let summary := match r.medianNanos?, r.minNanos?, r.maxNanos? with
     | some med, some lo, some hi =>

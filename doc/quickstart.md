@@ -664,10 +664,11 @@ sanity-check spawn per registration.
 
 | Field | Default | Purpose |
 |-------|---------|---------|
-| `repeats` | `5` | Number of measured invocations after the warmup |
-| `maxSecondsPerCall` | `60.0` | Hard wallclock cap per invocation (seconds) |
+| `repeats` | `5` | Number of measured spawns after the warmup |
+| `maxSecondsPerCall` | `60.0` | Hard wallclock cap per spawn (seconds) |
 | `killGraceMs` | `100` | Grace ms between SIGTERM and SIGKILL |
 | `warmup` | `true` | Whether to perform a single discarded warmup call |
+| `minTotalSeconds` | `0.001` | Auto-tune floor on inner repeats per spawn (issue #58); the child doubles `inner_repeats` until total wall time clears the floor, then reports `total / inner_repeats` as per-call time |
 | `expectedHash` | `none` | Pin the result hash; mismatch fails the run (issue #55) |
 
 The hash-agreement check across repeats only verifies "all measured

@@ -95,13 +95,17 @@ Runtime registry for fixed-problem benchmarks declared with
 `setup_fixed_benchmark`. Cross-cutting code (`list`, `compare`,
 `verify`) iterates over both registries explicitly. -/
 
-/-- Runtime entry for a fixed benchmark. The `runner` performs one
-    timed invocation: starts the timer, runs the registered value
-    (forcing it via `blackBox`), stops the timer, and returns
-    `(totalNanos, resultHash?)`. -/
+/-- Runtime entry for a fixed benchmark. The `runner` runs the
+    registered value `count` times in one timed batch: starts the
+    timer, invokes the registered callable `count` times (forcing
+    each result via `blackBox`), stops the timer, and returns
+    `(totalNanos, firstHash?)`. The hash is from the *first* iteration
+    (issue #55 "first-iteration's result hash" semantics carried over
+    when the auto-tuner runs many iterations); `count = 0` is a no-op
+    that returns `(0, none)`. Issue #58. -/
 structure FixedRuntimeEntry where
   spec   : FixedSpec
-  runner : IO (Nat × Option UInt64)
+  runner : Nat → IO (Nat × Option UInt64)
   deriving Inhabited
 
 initialize fixedRuntimeRegistry : IO.Ref (Std.HashMap Name FixedRuntimeEntry) ←
@@ -113,7 +117,8 @@ def findFixedRuntimeEntry (name : Name) : IO (Option FixedRuntimeEntry) := do
 def allFixedRuntimeEntries : IO (Array FixedRuntimeEntry) := do
   return (← fixedRuntimeRegistry.get).valuesArray
 
-def registerFixed (spec : FixedSpec) (runner : IO (Nat × Option UInt64)) : IO Unit :=
+def registerFixed (spec : FixedSpec)
+    (runner : Nat → IO (Nat × Option UInt64)) : IO Unit :=
   fixedRuntimeRegistry.modify (·.insert spec.name { spec, runner })
 
 end LeanBench

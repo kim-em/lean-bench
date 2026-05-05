@@ -100,6 +100,7 @@ since they have no meaning for a fixed benchmark. -/
 def fixedConfigOverrideFromParsed (p : Cli.Parsed) : FixedConfigOverride :=
   { repeats?            := parsedFlag? p "repeats" Nat
     maxSecondsPerCall?  := parsedFlag? p "max-seconds-per-call" Float
+    minTotalSeconds?    := parsedFlag? p "min-total-seconds" Float
     ignoreExpectedHash  := p.hasFlag "ignore-expected-hash" }
 
 /-! ## Benchmark filtering (issue #10)

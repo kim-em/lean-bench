@@ -48,9 +48,11 @@ def requiredParametricKeys : Array String :=
   #["param", "inner_repeats"]
 
 /-- Required keys on a fixed row, in addition to
-    `requiredCommonKeys`. -/
+    `requiredCommonKeys`. `inner_repeats` arrived in issue #58:
+    fixed children now auto-tune inner repeats per spawn, mirroring
+    parametric warm-mode, so the count must travel with every row. -/
 def requiredFixedKeys : Array String :=
-  #["repeat_index"]
+  #["repeat_index", "inner_repeats"]
 
 /-- Optional keys emitted on every row today. Absence is equivalent
     to `null`.

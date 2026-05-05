@@ -738,6 +738,15 @@ structure FixedBenchmarkConfig where
   /-- Whether to perform a single discarded warmup call before the
       measured calls. Defaults to true. -/
   warmup            : Bool  := true
+  /-- Auto-tune floor for inner repeats inside one child (s). The child
+      runs the registered callable once; if total wall time is below
+      this floor, it doubles the inner-repeat count and re-runs the
+      batch until total wall time clears the floor (or the parent's
+      `maxSecondsPerCall` cap kills the child). Per-iteration time is
+      reported as `total / inner_repeats`. Default `0.001` = 1 ms,
+      matching the parametric `targetInnerNanos / 2` signal-floor
+      convention. Issue #58. -/
+  minTotalSeconds   : Float := 0.001
   /-- Expected `Hashable` hash of the benchmark's result. When `some H`,
       the harness compares the first `ok` repeat's hash against `H`
       and fails on mismatch. Catches the "regressed to a stable but
@@ -760,6 +769,7 @@ structure FixedConfigOverride where
   maxSecondsPerCall? : Option Float := none
   killGraceMs?       : Option Nat   := none
   warmup?            : Option Bool  := none
+  minTotalSeconds?   : Option Float := none
   /-- When `true`, drops `expectedHash` for this run (CLI:
       `--ignore-expected-hash`). Local-experimentation escape hatch
       for the issue #55 correctness gate. -/
@@ -774,6 +784,7 @@ def FixedConfigOverride.apply (o : FixedConfigOverride)
     maxSecondsPerCall := o.maxSecondsPerCall?.getD c.maxSecondsPerCall
     killGraceMs       := o.killGraceMs?.getD       c.killGraceMs
     warmup            := o.warmup?.getD            c.warmup
+    minTotalSeconds   := o.minTotalSeconds?.getD   c.minTotalSeconds
     expectedHash      := if o.ignoreExpectedHash then none else c.expectedHash }
 
 def FixedBenchmarkConfig.validate (c : FixedBenchmarkConfig) : Except String Unit := do
@@ -781,6 +792,10 @@ def FixedBenchmarkConfig.validate (c : FixedBenchmarkConfig) : Except String Uni
     .error s!"FixedBenchmarkConfig.maxSecondsPerCall must be > 0; got {c.maxSecondsPerCall}"
   unless c.repeats ≥ 1 do
     .error s!"FixedBenchmarkConfig.repeats must be ≥ 1; got {c.repeats}"
+  unless c.minTotalSeconds ≥ 0.0 do
+    .error s!"FixedBenchmarkConfig.minTotalSeconds must be ≥ 0; got {c.minTotalSeconds}"
+  unless c.minTotalSeconds < c.maxSecondsPerCall do
+    .error s!"FixedBenchmarkConfig.minTotalSeconds ({c.minTotalSeconds}s) must be less than maxSecondsPerCall ({c.maxSecondsPerCall}s); the auto-tuner would never converge"
   pure ()
 
 /-- One entry in the fixed-benchmark registry. -/
@@ -798,6 +813,11 @@ structure FixedDataPoint where
   /-- 0-based index across the `repeats` measured calls. The single
       warmup call is not recorded. -/
   repeatIndex : Nat
+  /-- Auto-tuned inner-repeat count chosen by the child (issue #58).
+      `totalNanos` covers all `innerRepeats` invocations together;
+      per-call time is `totalNanos / innerRepeats`. `0` on synthesized
+      error / killed-at-cap rows. -/
+  innerRepeats : Nat := 1
   totalNanos  : Nat
   /-- Present iff the benchmark's value type has `Hashable`. -/
   resultHash  : Option UInt64

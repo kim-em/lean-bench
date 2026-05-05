@@ -86,6 +86,16 @@ setup_fixed_benchmark cheapPureRegressed where {
   -- `Hashable.hash (cheapPure ())`, so the check must fail.
   expectedHash := some ((Hashable.hash (cheapPure ())) ^^^ 0xffffffffffffffff) }
 
+/-- Tiny synonym used for the issue #58 auto-tune test: `cheapPure`
+    runs a 50-step Fibonacci loop, well under 1µs, so the auto-tuner
+    must pick `inner_repeats > 1` to clear the default 1ms floor. -/
+def autoTuneTarget : Unit → UInt64 := cheapPure
+
+setup_fixed_benchmark autoTuneTarget where {
+  repeats := 1
+  warmup := false
+  minTotalSeconds := 0.005 }
+
 end LeanBench.Test.Fixed
 
 open LeanBench
@@ -100,6 +110,8 @@ private def cheapPureCorrectName   : Lean.Name :=
   `LeanBench.Test.Fixed.cheapPureCorrect
 private def cheapPureRegressedName : Lean.Name :=
   `LeanBench.Test.Fixed.cheapPureRegressed
+private def autoTuneTargetName     : Lean.Name :=
+  `LeanBench.Test.Fixed.autoTuneTarget
 
 /-- Substring helper. -/
 private def stringContains (haystack needle : String) : Bool :=
@@ -108,8 +120,8 @@ private def stringContains (haystack needle : String) : Bool :=
 def testRoundtrip : IO UInt32 := do
   let row :=
     "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-    "\"repeat_index\":2,\"total_nanos\":1234567,\"result_hash\":\"0xcafebabe\"," ++
-    "\"status\":\"ok\",\"error\":null}"
+    "\"repeat_index\":2,\"inner_repeats\":4,\"total_nanos\":1234567," ++
+    "\"result_hash\":\"0xcafebabe\",\"status\":\"ok\",\"error\":null}"
   match parseFixedChildRow row with
   | .error e =>
     IO.eprintln s!"parse failure: {e}"
@@ -117,6 +129,7 @@ def testRoundtrip : IO UInt32 := do
   | .ok dp =>
     let ok :=
       dp.repeatIndex == 2 ∧
+      dp.innerRepeats == 4 ∧
       dp.totalNanos == 1234567 ∧
       dp.resultHash == some 0xcafebabe ∧
       dp.status == .ok
@@ -422,6 +435,76 @@ def testFormat : IO UInt32 := do
     return 1
   return 0
 
+/-- Issue #58: a sub-microsecond fixed body runs through the
+    auto-tuner, which doubles `inner_repeats` until total wall time
+    crosses `minTotalSeconds`. Pin three observable invariants:
+    (a) the row's `inner_repeats` field is `> 1` (auto-tune fired),
+    (b) `total_nanos` cleared the configured floor, and
+    (c) `inner_repeats` is a power of two (the doubling shape). -/
+def testAutoTuneFiresOnFastBody : IO UInt32 := do
+  let result ← runFixedBenchmark autoTuneTargetName
+  if result.points.size != 1 then
+    IO.eprintln s!"expected 1 repeat, got {result.points.size}"
+    return 1
+  let dp := result.points[0]!
+  unless dp.status == .ok do
+    IO.eprintln s!"unexpected status: {repr dp.status}"
+    return 1
+  unless dp.innerRepeats > 1 do
+    IO.eprintln s!"expected inner_repeats > 1 (auto-tune); got {dp.innerRepeats}"
+    return 1
+  -- Floor is 5 ms = 5_000_000 ns; the autotuner exits when total
+  -- *crosses* the floor, so we should see at least that.
+  unless dp.totalNanos ≥ 5_000_000 do
+    IO.eprintln s!"expected total_nanos ≥ 5ms (floor); got {dp.totalNanos} ns"
+    return 1
+  -- Power of two — the doubling probe never lands on anything else.
+  let isPow2 := dp.innerRepeats > 0 ∧ (dp.innerRepeats &&& (dp.innerRepeats - 1)) == 0
+  unless isPow2 do
+    IO.eprintln s!"expected inner_repeats to be a power of two; got {dp.innerRepeats}"
+    return 1
+  return 0
+
+/-- Issue #58: with `--min-total-seconds` overridden to 0, the
+    auto-tuner short-circuits to a single invocation, restoring
+    pre-#58 behaviour for callers that opt out. -/
+def testAutoTuneFloorOverrideZero : IO UInt32 := do
+  let result ← runFixedBenchmark autoTuneTargetName
+    (override := { minTotalSeconds? := some 0.0 })
+  if result.points.size != 1 then
+    IO.eprintln s!"override floor=0: expected 1 repeat, got {result.points.size}"
+    return 1
+  let dp := result.points[0]!
+  unless dp.status == .ok do
+    IO.eprintln s!"override floor=0: unexpected status: {repr dp.status}"
+    return 1
+  unless dp.innerRepeats == 1 do
+    IO.eprintln s!"override floor=0: expected inner_repeats=1, got {dp.innerRepeats}"
+    return 1
+  return 0
+
+/-- Issue #58: an `expectedHash` declared on a fast (auto-tuned)
+    benchmark still passes its check. The runner returns the *first*
+    iteration's hash, and the checker compares against it. Pin the
+    end-to-end interaction so a refactor that changes which hash the
+    runner returns can't silently break #55 under #58. -/
+def testAutoTuneExpectedHashStillMatches : IO UInt32 := do
+  -- Re-purpose `cheapPureCorrect` (which has the right `expectedHash`
+  -- pinned) under a high floor so auto-tune fires.
+  let result ← runFixedBenchmark cheapPureCorrectName
+    (override := { minTotalSeconds? := some 0.005 })
+  unless result.expectedHashCheck == .match do
+    IO.eprintln s!"expected .match under auto-tune, got {repr result.expectedHashCheck}"
+    return 1
+  -- Verify auto-tune actually fired in at least one repeat (sub-µs
+  -- body, 5 ms floor → must have done many iterations).
+  let firedSomewhere := result.points.any fun dp =>
+    dp.status == .ok ∧ dp.innerRepeats > 1
+  unless firedSomewhere do
+    IO.eprintln s!"expected auto-tune to fire; points={repr result.points}"
+    return 1
+  return 0
+
 /-- `medianNat` reports the upper of the two middle elements for
     even-length arrays — the conservative choice for regression
     detection. Pin that contract so a future "lower-middle" change
@@ -433,18 +516,23 @@ def testEvenRepeatsMedian : IO UInt32 := do
   if result.points.size != 2 then
     IO.eprintln s!"expected 2 repeats, got {result.points.size}"
     return 1
-  let okNanos : Array Nat := result.points.filterMap fun dp =>
+  -- Per-call (issue #58): the median is computed against
+  -- `totalNanos / innerRepeats`, so the test fixture has to mirror
+  -- that derivation rather than fall back to raw totals.
+  let okPerCall : Array Nat := result.points.filterMap fun dp =>
     match dp.status with
-    | .ok => some dp.totalNanos
+    | .ok =>
+      let n := if dp.innerRepeats == 0 then 1 else dp.innerRepeats
+      some (dp.totalNanos / n)
     | _   => none
-  if okNanos.size != 2 then
-    IO.eprintln s!"expected 2 ok repeats; got nanos {okNanos}"
+  if okPerCall.size != 2 then
+    IO.eprintln s!"expected 2 ok repeats; got per-call nanos {okPerCall}"
     return 1
-  let upper := if okNanos[0]! > okNanos[1]! then okNanos[0]! else okNanos[1]!
+  let upper := if okPerCall[0]! > okPerCall[1]! then okPerCall[0]! else okPerCall[1]!
   match result.medianNanos? with
   | some m =>
     unless m == upper do
-      IO.eprintln s!"expected upper-median {upper}, got {m} (raw nanos {okNanos})"
+      IO.eprintln s!"expected upper-median {upper}, got {m} (per-call nanos {okPerCall})"
       return 1
     return 0
   | none =>
@@ -468,7 +556,10 @@ def runTests : IO UInt32 := do
      ("expectedHashRoundtrip", testExpectedHashRoundtrip),
      ("expectedHashCheckProjection", testExpectedHashCheckProjection),
      ("ignoreExpectedHashOverride", testIgnoreExpectedHashOverride),
-     ("expectedHashVerify", testExpectedHashVerify)]
+     ("expectedHashVerify", testExpectedHashVerify),
+     ("autoTuneFiresOnFastBody", testAutoTuneFiresOnFastBody),
+     ("autoTuneFloorOverrideZero", testAutoTuneFloorOverrideZero),
+     ("autoTuneExpectedHashStillMatches", testAutoTuneExpectedHashStillMatches)]
   do
     let code ← t
     if code != 0 then

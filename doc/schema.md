@@ -86,6 +86,7 @@ key on the integer only.
 | key              | type    | meaning |
 |------------------|---------|---------|
 | `repeat_index`   | integer | 0-based index across the configured `repeats`. |
+| `inner_repeats`  | integer | Auto-tuned inner repeat count chosen inside the child (issue #58). The child runs the body once; if total wall time is below `FixedBenchmarkConfig.minTotalSeconds` the count doubles until the floor is cleared. Per-iteration time is `total_nanos / inner_repeats`. `0` on synthesized error rows. |
 
 ### Optional fields (both kinds)
 

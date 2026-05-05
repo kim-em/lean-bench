@@ -382,7 +382,9 @@ def runChildCmd (p : Cli.Parsed) : IO UInt32 := do
       match parsedFlag? p "repeat-index" Nat with
       | some n => n
       | none   => 0
-    LeanBench.runFixedChildMode benchStr.toName repeatIdx env?
+    let minTotalNanos : Nat :=
+      (parsedFlag? p "min-total-nanos" Nat).getD 1_000_000
+    LeanBench.runFixedChildMode benchStr.toName repeatIdx minTotalNanos env?
   else
     let param := (p.flag! "param").as! Nat
     let targetNanos := (p.flag! "target-nanos").as! Nat

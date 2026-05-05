@@ -657,6 +657,7 @@ def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
   Schema.checkKind Schema.kindFixed json
   let _ ← json.getObjValAs? String "function"
   let repeatIndex ← json.getObjValAs? Nat "repeat_index"
+  let innerRepeats ← json.getObjValAs? Nat "inner_repeats"
   let totalNanos ← json.getObjValAs? Nat "total_nanos"
   let parseOptionalHash (j : Json) : Except String (Option UInt64) := do
     match j.getObjVal? "result_hash" with
@@ -681,11 +682,12 @@ def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
     match json.getObjValAs? Nat "peak_rss_kb" with
     | .ok n => some n
     | .error _ => none
-  return { repeatIndex, totalNanos, resultHash, status,
+  return { repeatIndex, innerRepeats, totalNanos, resultHash, status,
            allocBytes, peakRssKb }
 
 private def synthFixedRow (idx : Nat) (status : Status) : FixedDataPoint :=
-  { repeatIndex := idx, totalNanos := 0, resultHash := none, status }
+  { repeatIndex := idx, innerRepeats := 0, totalNanos := 0,
+    resultHash := none, status }
 
 /-- Pure classifier for the post-spawn outcome of a fixed-benchmark
     child run. Mirrors `classifyChildOutcome` for the parametric path. -/
@@ -721,11 +723,17 @@ def runFixedOneBatch (spec : FixedSpec) (cfg : FixedBenchmarkConfig)
   let exe ← ownExe
   let deadlineMs : UInt32 :=
     (cfg.maxSecondsPerCall * 1000.0 + cfg.killGraceMs.toFloat).toUInt32
+  -- Auto-tuner floor in nanoseconds. Saturates at 2^63 - 1 if a user
+  -- declares an absurd value; the validator already rejects the case
+  -- where the floor exceeds `maxSecondsPerCall`.
+  let minTotalNanos : Nat :=
+    (cfg.minTotalSeconds * 1_000_000_000.0).toUInt64.toNat
   let args := withEnvArg #[
     "_child",
     "--bench", spec.name.toString (escape := false),
     "--fixed",
-    "--repeat-index", toString repeatIndex
+    "--repeat-index", toString repeatIndex,
+    "--min-total-nanos", toString minTotalNanos
   ] env?
   let (exit, stdout, stderrText, wasKilled) ← spawnWithCap exe args deadlineMs
   return classifyFixedChildOutcome repeatIndex exit stdout stderrText wasKilled
@@ -791,9 +799,16 @@ def runFixedBenchmark (name : Lean.Name)
       break
     let dp ← runFixedOneBatch entry.spec cfg i (some env)
     points := points.push dp
+  -- Auto-tune (issue #58) means each spawn measures `innerRepeats`
+  -- iterations in one batch; report per-iteration time so the median
+  -- describes a single invocation regardless of the auto-tuned count.
+  -- `innerRepeats == 0` only on synthesized error rows, which are
+  -- already filtered out by the `.ok` match above.
   let okNanos : Array Nat := points.filterMap fun dp =>
     match dp.status with
-    | .ok => some dp.totalNanos
+    | .ok =>
+      let n := if dp.innerRepeats == 0 then 1 else dp.innerRepeats
+      some (dp.totalNanos / n)
     | _   => none
   let sorted := okNanos.qsort (· < ·)
   let medianNanos? := medianNat sorted
