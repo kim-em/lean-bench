@@ -117,8 +117,9 @@ for the full guide.
 
 ## Status
 
-v0.1. Cross-platform: works on every platform Lean's process API
-supports (Linux, macOS, Windows). See [PLAN.md](PLAN.md) for the
+v0.1. Linux and macOS are exercised in CI. Windows builds in CI but
+the test suite isn't run there yet — reports of breakage welcome.
+See [PLAN.md](PLAN.md) for the
 v0.2+ roadmap, [doc/quickstart.md](doc/quickstart.md) for the
 user guide, [doc/pitfalls.md](doc/pitfalls.md) for Lean-specific
 benchmarking pitfalls (bignum `Nat`, forcing evaluation, sharing,
@@ -163,6 +164,3 @@ benchmark you're going to commit to a CI baseline.
 The verdict is a thresholded log-log slope (`|β| ≤ 0.15` over the
 trimmed tail), not a statistical test. β's sign tells you direction;
 read the raw ratios for magnitude.
-
-CI runs on Linux and macOS. Windows builds in CI but the test suite
-isn't run there yet.
