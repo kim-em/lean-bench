@@ -33,8 +33,8 @@ private def containsSub (haystack needle : String) : Bool :=
 
 /-- A canonical `ok` JSONL row exactly like `Child.emitRow` produces. -/
 private def okJsonlRow : String :=
-  "{\"schema_version\":1,\"function\":\"foo.bar\",\"param\":42," ++
-  "\"inner_repeats\":1024,\"total_nanos\":3000000," ++
+  "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
+  "\"param\":42,\"inner_repeats\":1024,\"total_nanos\":3000000," ++
   "\"per_call_nanos\":2929.6875,\"result_hash\":\"0xdeadbeef\"," ++
   "\"status\":\"ok\",\"error\":null}"
 
@@ -83,8 +83,8 @@ def testParseUnknownStatusBecomesError : IO UInt32 := do
   -- Unknown status string must round-trip into `.error`, not silently
   -- coerce to `.ok` (which would mark a broken child as healthy).
   let row :=
-    "{\"schema_version\":1,\"function\":\"foo.bar\",\"param\":42," ++
-    "\"inner_repeats\":1024,\"total_nanos\":3000000," ++
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
+    "\"param\":42,\"inner_repeats\":1024,\"total_nanos\":3000000," ++
     "\"per_call_nanos\":2929.6875,\"result_hash\":null," ++
     "\"status\":\"weirdo\",\"error\":null}"
   match parseChildRow row with

@@ -280,11 +280,10 @@ child via the `--env-json` flag, so children don't independently
 re-shell-out to `git` / `hostname` per ladder rung. The child reads
 the flag, parses with `fromJson`, and emits the row verbatim. -/
 
-/-- Decode an `Env` from a JSON object. Tolerates missing fields by
-filling in `Inhabited` defaults — callers are expected to validate
-upstream (the JSON came from a sibling `RunEnv.toJson` call) so
-this is loose on input by design. The schema doc's "tolerate
-missing keys as null" carve-out applies here too. -/
+/-- Decode an `Env` from a JSON object. Optional fields collapse to
+`none` when absent or `null`; required string/int fields fail
+loudly. The producer is always a sibling `RunEnv.toJson` call in
+the same binary, so the input shape is guaranteed. -/
 def fromJson (j : Json) : Except String Env := do
   -- For optional fields we accept either `null`, an absent key, or
   -- a value of the right type. `getObjValAs?` returns `.error` for

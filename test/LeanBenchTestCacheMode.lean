@@ -15,8 +15,6 @@ Pin the warm/cold execution-mode plumbing end-to-end:
   auto-tuned `inner_repeats > 1`, cold produces `inner_repeats = 1`.
 - The emitted JSONL row carries the `cache_mode` discriminator string
   on the parametric path.
-- Older fixtures missing `cache_mode` parse without error
-  (back-compat: it's an additive optional field).
 
 The same compiled binary acts as parent (the test driver) and child
 (when the parent's `runOneBatch` spawns it via `_child`).
@@ -359,20 +357,6 @@ def testColdUnderLinearScheduleSingleInvocation : IO UInt32 := do
     return 1
   return 0
 
-def testParseToleratesMissingCacheMode : IO UInt32 := do
-  -- Hand-rolled fixtures and pre-issue-12 rows omit `cache_mode`.
-  -- The parser must still succeed (additive optional field).
-  let row :=
-    "{\"schema_version\":1,\"function\":\"foo.bar\"," ++
-    "\"param\":7,\"inner_repeats\":2,\"total_nanos\":1000," ++
-    "\"per_call_nanos\":500.0,\"status\":\"ok\"}"
-  match parseChildRow row with
-  | .error e =>
-    IO.eprintln s!"FAIL: missing cache_mode row failed to parse: {e}"
-    return 1
-  | .ok dp =>
-    expectEq "missing-cache-mode parse" dp.status .ok
-
 /-! ## Driver -/
 
 def runTests : IO UInt32 := do
@@ -391,8 +375,7 @@ def runTests : IO UInt32 := do
       ("behaviour.cliColdOverride",        testCliColdOverrideTakesEffect),
       ("edges.coldKillPathFires",          testColdKillPathFires),
       ("edges.coldLinearSingleInvocation", testColdUnderLinearScheduleSingleInvocation),
-      ("wire.rowCarriesCacheMode",         testEmittedRowCarriesCacheMode),
-      ("wire.parseToleratesMissing",       testParseToleratesMissingCacheMode) ]
+      ("wire.rowCarriesCacheMode",         testEmittedRowCarriesCacheMode) ]
   do
     let code ← t
     if code != 0 then

@@ -360,7 +360,6 @@ private def parseParamSchedule (j : Json) (k : String) : ParamSchedule :=
   match j.getObjVal? k with
   | .ok (.str "doubling") => .doubling
   | .ok (.str "auto") => .auto
-  | .ok (.str "linear") => .linear  -- back-compat: old string form
   | .ok obj =>
     let kind := getStr obj "kind" "auto"
     match kind with
