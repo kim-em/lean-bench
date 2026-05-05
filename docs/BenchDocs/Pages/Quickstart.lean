@@ -59,8 +59,8 @@ The same project's `bench` exe supports `list`, `verify`, `run`, and
 
 ```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "list")
 registered benchmarks:
-  LeanBench.Examples.Fib.goodFib    expected complexity: n
-  LeanBench.Examples.Fib.badFib    expected complexity: 144 ^ n / 89 ^ n
+  LeanBench.Examples.Fib.goodFib    expected complexity: n  [fib, linear]
+  LeanBench.Examples.Fib.badFib    expected complexity: 144 ^ n / 89 ^ n  [fib, exponential]
 ```
 
 `verify` is the fastest sanity-check: it spawns the child path against
@@ -198,6 +198,25 @@ When no `--tag` or `--filter` is given, all benchmarks are included.
 Name filtering matches anywhere in the fully-qualified dotted name,
 so `--filter Sort` matches `MyProject.Sort.runMergeSort`.
 
+Concrete examples against the in-tree `fib_benchmark_example`, whose
+two benchmarks are tagged `[fib, linear]` and `[fib, exponential]`:
+
+```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "list --tag fib")
+registered benchmarks:
+  LeanBench.Examples.Fib.goodFib    expected complexity: n  [fib, linear]
+  LeanBench.Examples.Fib.badFib    expected complexity: 144 ^ n / 89 ^ n  [fib, exponential]
+```
+
+```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "list --tag exponential")
+registered benchmarks:
+  LeanBench.Examples.Fib.badFib    expected complexity: 144 ^ n / 89 ^ n  [fib, exponential]
+```
+
+```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "list --filter goodFib")
+registered benchmarks:
+  LeanBench.Examples.Fib.goodFib    expected complexity: n  [fib, linear]
+```
+
 Lean namespaces naturally provide hierarchical grouping. Combined
 with `--filter`, this gives you namespace-based filtering for free:
 
@@ -253,7 +272,18 @@ benchmark with a 30s `maxSecondsPerCall` can blow past a 5s budget
 by up to 30s. Tighten the per-call cap if you need a tighter bound.
 
 A budgeted run prints a one-line summary at the bottom plus a
-bullet per skipped benchmark:
+bullet per skipped benchmark. With `--total-seconds 0` the deadline
+trips before any benchmark starts, so every selected benchmark is
+recorded as a `budget_skip`:
+
+```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "run --tag fib --total-seconds 0") (normalise := "skipBlank")
+budget: 0.000s; elapsed 0.000s; completed 0, skipped 2
+  [budget skip] LeanBench.Examples.Fib.goodFib    [parametric]
+  [budget skip] LeanBench.Examples.Fib.badFib    [parametric]
+```
+
+A real (non-zero) budget produces the same shape with `completed`
+and `truncated` populated:
 
 ```
 budget: 60.000s; elapsed 58.910s; completed 7, skipped 2, truncated 1
@@ -397,6 +427,68 @@ appends one or more `‼` advisory lines after the verdict, each
 naming a concrete knob to turn next (`--max-seconds-per-call`,
 `--param-ceiling`, `paramSchedule := .custom #[...]`,
 `setup_fixed_benchmark`, …).
+
+A real (consistent) `goodFib` run with a wide ladder, on stable
+hardware. The trimmed-warmup region is marked with `†`, signal-floor
+exclusions with `[<floor]`, and the verdict line carries `cMin`,
+`cMax`, and the log-log slope `β`:
+
+```benchTranscript (caption := "lake exe fib_benchmark_example run goodFib (consistent verdict)")
+$ lake exe fib_benchmark_example run goodFib --param-ceiling 4096 --max-seconds-per-call 1
+LeanBench.Examples.Fib.goodFib    expected complexity: n    [warm cache]
+  env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=<HASH>, <DATE>, host=<HOST>
+  param  per-call    repeats  C
+      0   46.000 ns  ×2^23    C= —
+      1  107.000 ns  ×2^23    C= —
+      2   82.000 ns  ×2^22    C=41.343 †
+      4  112.000 ns  ×2^21    C= —     [<floor]
+      8  200.000 ns  ×2^22    C=25.061 †
+     16  278.000 ns  ×2^21    C=17.416
+     32  459.000 ns  ×2^20    C=14.353
+     64    1.236 µs  ×2^19    C=19.324
+    128    2.334 µs  ×2^18    C=18.241
+    256    3.743 µs  ×2^17    C=14.623
+    512    7.506 µs  ×2^16    C=14.662
+  1_024   17.287 µs  ×2^15    C=16.882
+  2_048   18.792 µs  ×2^13    C= —     [<floor]
+  4_096   43.304 µs  ×2^13    C=10.572
+  verdict: consistent with declared complexity (cMin=10.572, cMax=19.324, β=-0.065)
+  per-spawn floor (harness self-measurement): 33.998 ms
+```
+
+`β=-0.065` is well inside the `|β| ≤ 0.15` band, so the verdict is
+"consistent". Reading the table: per-call time grows roughly
+linearly with `param` once you're out of the cold regime; `C`
+stabilises near 15 ns once the per-spawn overhead amortises. The
+two `[<floor]` rows on this ladder are pure noise — their batches
+were too short for the timer's resolution above the floor — and
+correctly drop out of the verdict.
+
+A tighter ladder on the same benchmark, where the cap fires before
+real timing data accumulates, gives the opposite signal. Note the
+`‼` advisories at the bottom telling you which knob to turn next:
+
+```benchTranscript (caption := "lake exe fib_benchmark_example run goodFib (inconclusive — under-resolved)")
+$ lake exe fib_benchmark_example run goodFib --param-ceiling 16 --max-seconds-per-call 0.5 --signal-floor-multiplier 1.0
+LeanBench.Examples.Fib.goodFib    expected complexity: n    [warm cache]
+  env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=<HASH>, <DATE>, host=<HOST>
+  param  per-call    repeats  C
+      0   55.000 ns  ×2^23    C= —
+      1  113.000 ns  ×2^23    C= —
+      2   79.000 ns  ×2^22    C=39.733
+      4  140.000 ns  ×2^22    C=35.008
+      8  234.000 ns  ×2^22    C=29.356
+     16  247.000 ns  ×2^21    C=15.492
+  verdict: inconclusive (cMin=15.492, cMax=39.733, β=-0.433, looks faster than declared by ~n^0.433)
+  per-spawn floor (harness self-measurement): 32.899 ms
+```
+
+`β=-0.433` is well outside `|β| ≤ 0.15`, so the verdict is
+"inconclusive" with a directional hint ("looks faster than declared
+by ~n^0.433"). On this ladder the small-`n` regime is dominated by
+per-call setup costs, dragging `C` down across rungs; widening the
+ladder (`--param-ceiling`) lets the asymptotic linear cost dominate
+and the verdict tip back to consistent (as in the previous example).
 
 # Auto-fit
 
