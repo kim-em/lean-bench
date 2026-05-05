@@ -96,7 +96,7 @@ root = "MyBenchmarks"
 Then `lake exe my_benchmarks list / run NAME / compare A B / verify /
 profile NAME --profiler "perf record -g --"`.
 See the [deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) and
-[doc/profiling.md](doc/profiling.md).
+[the Profiling page](https://kim-em.github.io/lean-bench/Profiling/).
 
 ## Fixed-problem benchmarks
 
@@ -125,11 +125,11 @@ v0.1. Linux and macOS are exercised in CI. Windows builds in CI but
 the test suite isn't run there yet — reports of breakage welcome.
 See [PLAN.md](PLAN.md) for the
 v0.2+ roadmap, [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) for the
-user guide, [doc/pitfalls.md](doc/pitfalls.md) for Lean-specific
+user guide, [the Pitfalls page](https://kim-em.github.io/lean-bench/Lean-specific-benchmarking-pitfalls/) for Lean-specific
 benchmarking pitfalls (bignum `Nat`, forcing evaluation, sharing,
-warm vs. cold), [doc/profiling.md](doc/profiling.md) for the
+warm vs. cold), [the Profiling page](https://kim-em.github.io/lean-bench/Profiling/) for the
 external-profiler integration (`perf`, `samply`, `heaptrack`,
-`/usr/bin/time -v`), and [doc/schema.md](doc/schema.md) for the
+`/usr/bin/time -v`), and [the Result schema page](https://kim-em.github.io/lean-bench/Result-schema/) for the
 JSONL result-row schema and its evolution rules.
 
 ## Design
@@ -144,7 +144,7 @@ in-process interrupt for arbitrary computation, so the only reliable
 way to enforce a wallclock cap is to give each measurement its own
 process.
 
-See [doc/design.md](doc/design.md) for the full architectural
+See [the Design page](https://kim-em.github.io/lean-bench/Design/) for the full architectural
 rationale, including limits and known caveats.
 
 ## Caveats
@@ -162,7 +162,7 @@ Lean's `Nat` is bignum, the compiler hoists pure work out of loops
 unless its result is observed, and reference-counted sharing can
 flip operations between O(1) and O(n) depending on aliasing — these
 and other Lean-specific traps are covered in
-[doc/pitfalls.md](doc/pitfalls.md). Read it before declaring a
+[the Pitfalls page](https://kim-em.github.io/lean-bench/Lean-specific-benchmarking-pitfalls/). Read it before declaring a
 benchmark you're going to commit to a CI baseline.
 
 The verdict is a thresholded log-log slope (`|β| ≤ 0.15` over the

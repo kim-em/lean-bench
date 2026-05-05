@@ -26,7 +26,7 @@ wire format (`Schema.lean`, `Child.lean`) is the internal
 child-to-parent protocol; this module owns the user-facing file
 format. They use separate version counters
 (`export_schema_version` vs `schema_version`) so they can evolve
-independently -- see `doc/schema.md#export-format`.
+independently -- see `https://kim-em.github.io/lean-bench/Result-schema/Export-format/`.
 
 Issue #3.
 -/

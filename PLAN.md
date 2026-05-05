@@ -21,7 +21,7 @@ without re-running the function in a Lean file.
 
 Plan: add an optional `result_preview : string | null` field to the
 JSONL row (additive — no schema bump needed; see
-[`doc/schema.md`](doc/schema.md)), populate it from `setup_benchmark`
+[`https://kim-em.github.io/lean-bench/Result-schema/`](https://kim-em.github.io/lean-bench/Result-schema/)), populate it from `setup_benchmark`
 when `ToString α` synthesizes (truncated to ~80 characters), and
 extend the formatter to surface the preview alongside the hash on
 the divergence line.
@@ -71,7 +71,7 @@ need `Float`.
 
 ## Notes for contributors
 
-The v0.1 architecture is documented in [doc/design.md](doc/design.md).
+The v0.1 architecture is documented in [https://kim-em.github.io/lean-bench/Design/](https://kim-em.github.io/lean-bench/Design/).
 The retrospective from the predecessor harness (in `~/hex` benchmarks)
 that motivated this library is at
 [../hex/progress/2026-04-23T12:57:18Z_bench-prototype.md](../hex/progress/2026-04-23T12:57:18Z_bench-prototype.md)

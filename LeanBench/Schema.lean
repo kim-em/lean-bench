@@ -7,14 +7,14 @@ import LeanBench.Core
 Single source of truth for the JSONL row format produced by the child
 process and consumed by the parent. Pins the version constant, the
 canonical required-key sets, and the tolerance rules described in
-[`doc/schema.md`](../doc/schema.md).
+[`https://kim-em.github.io/lean-bench/Result-schema/`](https://kim-em.github.io/lean-bench/Result-schema/).
 
 The split from `LeanBench.Core` is deliberate: `Core` defines the
 in-memory data shapes (`DataPoint`, `FixedDataPoint`, …) that are
 internal to the harness, while `Schema` owns the wire format that
 external tooling (baseline diffs, exporters, dashboards) reads. The
 two move on different cadences: in-memory shapes can be refactored
-freely; the wire format only changes under the rules in `schema.md`.
+freely; the wire format only changes under the rules in `https://kim-em.github.io/lean-bench/Result-schema/`.
 -/
 
 open Lean (Json)
@@ -23,7 +23,7 @@ namespace LeanBench
 namespace Schema
 
 /-- Current schema version. Bump only on breaking changes — see
-[`doc/schema.md#versioning`](../doc/schema.md#versioning). -/
+[`https://kim-em.github.io/lean-bench/Result-schema/Versioning/`](https://kim-em.github.io/lean-bench/Result-schema/Versioning/). -/
 def schemaVersion : Nat := 1
 
 /-! ## Row-kind discriminator -/

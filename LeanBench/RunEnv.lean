@@ -23,7 +23,7 @@ compile-time constants (`leanVersion`, `leanToolchain`,
 `platformTarget`, `os`) are always populated.
 
 The schema doc reserves the `env` key on JSONL rows for issue #11;
-see [`doc/schema.md#environment-metadata`](../doc/schema.md#environment-metadata)
+see [`https://kim-em.github.io/lean-bench/Result-schema/Environment-metadata/`](https://kim-em.github.io/lean-bench/Result-schema/Environment-metadata/)
 for the full field list and stability rules.
 -/
 

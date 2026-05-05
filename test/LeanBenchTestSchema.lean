@@ -3,7 +3,7 @@ import LeanBench
 /-!
 # Schema-stability tests (issue #14)
 
-Pin the wire format documented in `doc/schema.md` so accidental
+Pin the wire format documented in `https://kim-em.github.io/lean-bench/Result-schema/` so accidental
 changes to required keys, the version constant, or compatibility
 expectations break this test.
 
