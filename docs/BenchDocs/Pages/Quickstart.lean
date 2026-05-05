@@ -109,6 +109,12 @@ section's whole topic. Skip ahead if you want the table dissected
 now; otherwise the next sections cover declaration-time options
 and we'll meet the full output again later.
 
+`compare` is the fourth subcommand and runs two or more named
+benchmarks side by side, intersecting their common parameter values
+and hashing every result so divergent implementations are flagged
+explicitly. Covered in
+[Compare divergence reports](https://kim-em.github.io/lean-bench/Quickstart/Compare-divergence-reports/).
+
 # Optional per-param setup
 
 If your benchmarked function operates on a structure that's expensive
