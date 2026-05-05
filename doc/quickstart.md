@@ -649,6 +649,17 @@ sanity-check spawn per registration.
 | `maxSecondsPerCall` | `60.0` | Hard wallclock cap per invocation (seconds) |
 | `killGraceMs` | `100` | Grace ms between SIGTERM and SIGKILL |
 | `warmup` | `true` | Whether to perform a single discarded warmup call |
+| `expectedHash` | `none` | Pin the result hash; mismatch fails the run (issue #55) |
+
+The hash-agreement check across repeats only verifies "all measured
+calls returned the same value", which on a low-cardinality return
+(`Bool`, small enums) is near-zero evidence. Pin `expectedHash :=
+some 0x…` and the run fails on mismatch with a clear "expected H, got
+H'" diagnostic; the JSON export records the failure under
+`expected_hash_check`. Workflow: register the benchmark, run once,
+copy the printed `observed hash:` into the `where` clause. For
+local experimentation when the result is intentionally changing,
+`--ignore-expected-hash` clears the assertion for that run.
 
 The CLI flag `--repeats N` overrides the declared `repeats` per run;
 `--max-seconds-per-call` is shared with parametric. Parametric-only

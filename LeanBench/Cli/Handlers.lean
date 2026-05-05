@@ -54,6 +54,14 @@ private def noUsableDataNames (parametric : Array BenchmarkResult) :
     Array Lean.Name :=
   parametric.filterMap fun r => if r.noUsableData then some r.function else none
 
+/-- Fixed benchmarks whose `expectedHash` check failed. A hash
+mismatch is a hard correctness failure, distinct from the soft
+`hashesAgree := false` non-determinism warning. Issue #55. -/
+private def expectedHashFailureNames (fixed : Array FixedResult) :
+    Array Lean.Name :=
+  fixed.filterMap fun r =>
+    if r.expectedHashCheck.passed then none else some r.function
+
 /-- Shared post-run logic: baseline comparison + export. Returns
 the exit code: `exitNoUsableData` (2) if any parametric run produced
 zero verdict-eligible rows, else `1` on baseline regressions, else `0`.
@@ -88,8 +96,15 @@ private def handleBaselineAndExport
     IO.FS.writeFile ep (json.pretty ++ "\n")
     IO.println s!"exported to {ep}"
   | none => pure ()
-  -- exitNoUsableData (2) supersedes baseline-regression (1): with no
-  -- data the regression check itself was meaningless.
+  -- expectedHash mismatch is on equal footing with a baseline
+  -- regression — bump to `1` if not already higher. Issue #55.
+  let hashFail := expectedHashFailureNames fixed
+  unless hashFail.isEmpty do
+    let names := String.intercalate ", " (hashFail.toList.map toString)
+    IO.eprintln s!"run: {hashFail.size} fixed benchmark(s) failed expectedHash check: {names}"
+    if exitCode == 0 then exitCode := 1
+  -- exitNoUsableData (2) supersedes (1): with no data the regression
+  -- check is meaningless.
   let noData := noUsableDataNames parametric
   unless noData.isEmpty do
     let names := String.intercalate ", " (noData.toList.map toString)
@@ -284,6 +299,13 @@ def runCompareCmd (p : Cli.Parsed) : IO UInt32 := do
       Export.exportToFile ep #[] report.results env?
       IO.println s!"exported to {ep}"
     | none => pure ()
+    -- expectedHash mismatch in the compared set is a hard failure.
+    -- Issue #55.
+    let hashFail := expectedHashFailureNames report.results
+    unless hashFail.isEmpty do
+      let names := String.intercalate ", " (hashFail.toList.map toString)
+      IO.eprintln s!"compare: {hashFail.size} fixed benchmark(s) failed expectedHash check: {names}"
+      return 1
     return 0
   IO.eprintln "compare: cannot mix parametric and fixed benchmarks; or one or more names are unregistered"
   return 1

@@ -98,8 +98,9 @@ plus the fixed-only `repeats` flag. Other parametric flags
 (param-ceiling, slope-tolerance) are ignored; that's deliberate
 since they have no meaning for a fixed benchmark. -/
 def fixedConfigOverrideFromParsed (p : Cli.Parsed) : FixedConfigOverride :=
-  { repeats?           := parsedFlag? p "repeats" Nat
-    maxSecondsPerCall? := parsedFlag? p "max-seconds-per-call" Float }
+  { repeats?            := parsedFlag? p "repeats" Nat
+    maxSecondsPerCall?  := parsedFlag? p "max-seconds-per-call" Float
+    ignoreExpectedHash  := p.hasFlag "ignore-expected-hash" }
 
 /-! ## Benchmark filtering (issue #10)
 

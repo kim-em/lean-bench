@@ -274,6 +274,11 @@ setup_fixed_benchmark Hex.Foo.factorXOverFTwo
 setup_fixed_benchmark MyBench.lllReduce30 where {
   repeats := 10
   maxSecondsPerCall := 30.0
+  -- Optional: pin the expected Hashable hash of the result. On
+  -- mismatch the run fails with "expected H, got H'". On the first
+  -- run, leave it unset and copy the `observed hash:` value the
+  -- run report prints. Issue #55.
+  expectedHash := some 0xdeadbeefdeadbeef
 }
 ```
 
@@ -285,8 +290,11 @@ canonical input. The harness performs one warmup call followed by
 a hash-agreement check across repeats.
 
 If `α` has a `Hashable` instance, every measured call's result is
-hashed; cross-repeat hash agreement guards against non-determinism.
-Without `Hashable`, the comparison falls back to timing only. -/
+hashed; cross-repeat agreement guards against non-determinism. The
+optional `expectedHash` field adds correctness on top: the first
+`ok` repeat's hash must equal the declared value, catching
+regressions that produce a different-but-stable hash (e.g. a `Bool`
+flipping). Without `Hashable`, neither check applies. -/
 
 /-- Inspect a registered name's type. Returns `(elementTy, isIO)`
 where `elementTy` is `α` for both `α` and `IO α` cases. The IO check

@@ -542,6 +542,10 @@ def fmtSpec (spec : BenchmarkSpec) : String :=
   let t := fmtTags spec.config.tags
   s!"  {spec.name}    expected complexity: {spec.complexityFormula}{h}{t}"
 
+/-- `0xDEADBEEF` rendering for a `UInt64`. -/
+def fmtHashHex (h : UInt64) : String :=
+  s!"0x{String.ofList (Nat.toDigits 16 h.toNat)}"
+
 /-- One-line summary of a registered fixed benchmark. The `[fixed]`
     annotation distinguishes it from parametric entries in the list. -/
 def fmtFixedSpec (spec : FixedSpec) : String :=
@@ -598,6 +602,21 @@ def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.
     else
       "  hash: DIVERGED across repeats — likely a non-deterministic benchmark"
   lines := lines.push hashLine
+  -- Surface the first ok repeat's hash so authors can copy it into a
+  -- `where { expectedHash := some 0x… }` clause. Issue #55.
+  match r.observedHash? with
+  | some h => lines := lines.push s!"  observed hash: {fmtHashHex h}"
+  | none => pure ()
+  match r.expectedHashCheck with
+  | .unset => pure ()
+  | .match =>
+    lines := lines.push "  expected hash: matches"
+  | .mismatch expected got =>
+    lines := lines.push s!"  expected hash: FAIL — expected {fmtHashHex expected}, got {fmtHashHex got}"
+  | .noObservedHash expected =>
+    lines := lines.push s!"  expected hash: FAIL — expected {fmtHashHex expected}, got no observed hash (no `ok` repeat produced one)"
+  | .inconsistentAcrossRepeats expected =>
+    lines := lines.push s!"  expected hash: FAIL — expected {fmtHashHex expected}, but repeats disagreed (see hash line above); pin a deterministic benchmark first"
   for line in fmtFixedMemorySummary r.points do
     lines := lines.push line
   return "\n".intercalate lines.toList
@@ -607,7 +626,7 @@ def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.
     whose child died before emitting a hash). -/
 private def fmtOptHashHex : Option UInt64 → String
   | none   => "—"
-  | some h => s!"0x{String.ofList (Nat.toDigits 16 h.toNat)}"
+  | some h => fmtHashHex h
 
 /-- One indented line per compared function: `<name> hash=<hex>`,
     annotated with how it relates to the baseline (the first entry

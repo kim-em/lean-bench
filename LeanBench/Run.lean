@@ -744,15 +744,20 @@ private def medianNat (sorted : Array Nat) : Option Nat :=
   if sorted.isEmpty then none
   else some sorted[sorted.size / 2]!
 
-/-- Are all `ok` repeats hash-consistent? Repeats with `none` hashes
-    (non-Hashable type) all agree vacuously; mixed `some`/`none`
-    shouldn't happen but is treated as agreement (the registration
-    macro decides Hashable up front). -/
-private def computeHashAgreement (points : Array FixedDataPoint) : Bool := Id.run do
-  let okHashes : Array UInt64 := points.filterMap fun dp =>
+/-- Hashes from the `ok` repeats, in repeat order. Drops repeats that
+    didn't produce a hash (non-`ok` status or non-Hashable type); both
+    the agreement check and the `expectedHash` check (which pivots on
+    index 0) consume this array. -/
+private def okHashesOf (points : Array FixedDataPoint) : Array UInt64 :=
+  points.filterMap fun dp =>
     match dp.status, dp.resultHash with
     | .ok, some h => some h
     | _,   _      => none
+
+/-- Are all `ok` repeats hash-consistent? Empty array — no `ok`
+    repeat produced a hash — is treated as vacuous agreement, matching
+    pre-#55 behaviour. -/
+private def computeHashAgreement (okHashes : Array UInt64) : Bool := Id.run do
   if okHashes.isEmpty then return true
   let h₀ := okHashes[0]!
   return okHashes.all (· == h₀)
@@ -794,7 +799,11 @@ def runFixedBenchmark (name : Lean.Name)
   let medianNanos? := medianNat sorted
   let minNanos? := sorted[0]?
   let maxNanos? := if sorted.isEmpty then none else some sorted[sorted.size - 1]!
-  let hashesAgree := computeHashAgreement points
+  let okHashes := okHashesOf points
+  let hashesAgree := computeHashAgreement okHashes
+  -- First `ok` repeat's hash; mirrors the agreement check's pivot.
+  -- Issue #55.
+  let observedHash? := okHashes[0]?
   return {
     function := name
     hashable := entry.spec.hashable
@@ -804,6 +813,7 @@ def runFixedBenchmark (name : Lean.Name)
     minNanos?
     maxNanos?
     hashesAgree
+    observedHash?
     env? := some env
     budgetTruncated
   }

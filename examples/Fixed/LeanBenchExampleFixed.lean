@@ -51,7 +51,12 @@ def tightFib60 : UInt64 := goodFib 60
     emits a runner that uses `←` to extract the value. -/
 def tightFibIO60 : IO UInt64 := return goodFib 60
 
-setup_fixed_benchmark tightFib60
+setup_fixed_benchmark tightFib60 where {
+  -- Pin the result hash so the run fails on a silent regression
+  -- (issue #55). On the first run, copy the printed `observed hash:`
+  -- value into the `where` clause.
+  expectedHash := some (Hashable.hash (goodFib 60))
+}
 setup_fixed_benchmark tightFibIO60 where {
   -- Override declared defaults; the `repeats` knob has no parametric
   -- analogue, hence the dedicated fixed-only field on

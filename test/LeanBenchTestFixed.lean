@@ -61,11 +61,26 @@ def slowPure : UInt64 := Id.run do
       x := x ^^^ 1
   return x
 
+/-- Synonym for the correct-`expectedHash` test (issue #55); a second
+    registration of `cheapPure` needs a distinct name. -/
+def cheapPureCorrect : UInt64 := cheapPure
+
+/-- Synonym for the wrong-`expectedHash` test (issue #55). -/
+def cheapPureRegressed : UInt64 := cheapPure
+
 setup_fixed_benchmark cheapPure where { repeats := 3 }
 setup_fixed_benchmark cheapIO   where { repeats := 3 }
 setup_fixed_benchmark cheapEIO  where { repeats := 2 }
 setup_fixed_benchmark cheapMyIO where { repeats := 2 }
 setup_fixed_benchmark slowPure  where { repeats := 1, maxSecondsPerCall := 5.0 }
+setup_fixed_benchmark cheapPureCorrect where {
+  repeats := 2
+  expectedHash := some (Hashable.hash cheapPure) }
+setup_fixed_benchmark cheapPureRegressed where {
+  repeats := 2
+  -- Deliberately wrong: bit-flipped expected hash. The runner produces
+  -- `Hashable.hash cheapPure`, so the check must fail.
+  expectedHash := some ((Hashable.hash cheapPure) ^^^ 0xffffffffffffffff) }
 
 end LeanBench.Test.Fixed
 
@@ -76,6 +91,10 @@ private def cheapIOName   : Lean.Name := `LeanBench.Test.Fixed.cheapIO
 private def cheapEIOName  : Lean.Name := `LeanBench.Test.Fixed.cheapEIO
 private def cheapMyIOName : Lean.Name := `LeanBench.Test.Fixed.cheapMyIO
 private def slowPureName  : Lean.Name := `LeanBench.Test.Fixed.slowPure
+private def cheapPureCorrectName   : Lean.Name :=
+  `LeanBench.Test.Fixed.cheapPureCorrect
+private def cheapPureRegressedName : Lean.Name :=
+  `LeanBench.Test.Fixed.cheapPureRegressed
 
 /-- Substring helper. -/
 private def stringContains (haystack needle : String) : Bool :=
@@ -223,6 +242,168 @@ def testKillOnCap : IO UInt32 := do
     IO.eprintln s!"kill-cap FAIL: expected killedAtCap, got {repr s}"
     return 1
 
+/-- Observed hash is populated and rendered even with no
+    `expectedHash` declared. Issue #55. -/
+def testObservedHashSurfaced : IO UInt32 := do
+  let result ← runFixedBenchmark cheapPureName
+  -- No expected hash is declared on the bare `cheapPure` registration.
+  unless result.config.expectedHash.isNone do
+    IO.eprintln "expected default expectedHash to be none"
+    return 1
+  -- But the observed hash must be populated and match the canonical
+  -- `Hashable.hash cheapPure` value (the runner is `let r := fnId; let
+  -- h := Hashable.hash r`).
+  unless result.observedHash? == some (Hashable.hash LeanBench.Test.Fixed.cheapPure) do
+    IO.eprintln s!"observedHash? mismatch: got {result.observedHash?}"
+    return 1
+  -- The expected-hash check should be `.unset` when nothing was
+  -- declared.
+  unless result.expectedHashCheck == .unset do
+    IO.eprintln s!"expected .unset, got {repr result.expectedHashCheck}"
+    return 1
+  -- The formatter must surface the observed hash so authors can read
+  -- it off the run output.
+  let rendered := Format.fmtFixedResult result
+  unless stringContains rendered "observed hash:" do
+    IO.eprintln s!"expected 'observed hash:' line in render, got:\n{rendered}"
+    return 1
+  return 0
+
+/-- Correct `expectedHash` → `.match`. Issue #55. -/
+def testExpectedHashMatch : IO UInt32 := do
+  let result ← runFixedBenchmark cheapPureCorrectName
+  unless result.expectedHashCheck == .match do
+    IO.eprintln s!"expected .match, got {repr result.expectedHashCheck}"
+    return 1
+  unless result.expectedHashCheck.passed do
+    IO.eprintln "expected .match to be passed"
+    return 1
+  let rendered := Format.fmtFixedResult result
+  unless stringContains rendered "expected hash: matches" do
+    IO.eprintln s!"expected match line in render, got:\n{rendered}"
+    return 1
+  return 0
+
+/-- Wrong `expectedHash` → `.mismatch` with `passed := false`; the
+    formatter renders a FAIL line. Issue #55. -/
+def testExpectedHashMismatch : IO UInt32 := do
+  let result ← runFixedBenchmark cheapPureRegressedName
+  let expected := (Hashable.hash LeanBench.Test.Fixed.cheapPure) ^^^ 0xffffffffffffffff
+  let got := Hashable.hash LeanBench.Test.Fixed.cheapPure
+  unless result.expectedHashCheck == .mismatch expected got do
+    IO.eprintln s!"expected .mismatch {expected} {got}, got {repr result.expectedHashCheck}"
+    return 1
+  if result.expectedHashCheck.passed then
+    IO.eprintln "expected .mismatch to NOT be passed"
+    return 1
+  let rendered := Format.fmtFixedResult result
+  unless stringContains rendered "expected hash: FAIL" do
+    IO.eprintln s!"expected FAIL line in render, got:\n{rendered}"
+    return 1
+  return 0
+
+/-- `expectedHash` and `observedHash?` survive JSON round-trip; the
+    derived `expectedHashCheck` reconstructs identically. Issue #55. -/
+def testExpectedHashRoundtrip : IO UInt32 := do
+  let result ← runFixedBenchmark cheapPureCorrectName
+  let json := Export.fixedResultToJson result
+  match Export.fixedResultFromJson json with
+  | .error e =>
+    IO.eprintln s!"roundtrip parse error: {e}"
+    return 1
+  | .ok r' =>
+    unless r'.config.expectedHash == result.config.expectedHash do
+      IO.eprintln s!"expectedHash roundtrip mismatch: {r'.config.expectedHash} vs {result.config.expectedHash}"
+      return 1
+    unless r'.observedHash? == result.observedHash? do
+      IO.eprintln s!"observedHash? roundtrip mismatch: {r'.observedHash?} vs {result.observedHash?}"
+      return 1
+    unless r'.expectedHashCheck == result.expectedHashCheck do
+      IO.eprintln s!"expectedHashCheck roundtrip mismatch: {repr r'.expectedHashCheck} vs {repr result.expectedHashCheck}"
+      return 1
+    return 0
+
+/-- Pure projection unit tests for `FixedResult.expectedHashCheck`:
+    pin the edge cases (non-Hashable, hashesAgree=false,
+    noObservedHash) without engineering rare runtime conditions.
+    Issue #55. -/
+def testExpectedHashCheckProjection : IO UInt32 := do
+  let baseCfg : FixedBenchmarkConfig := { expectedHash := some 0xabcd }
+  let mkResult (hashable : Bool) (hashesAgree : Bool)
+      (observedHash? : Option UInt64) : FixedResult :=
+    { function := `dummy
+      hashable
+      config := baseCfg
+      points := #[]
+      medianNanos? := none
+      minNanos?    := none
+      maxNanos?    := none
+      hashesAgree
+      observedHash? }
+  -- Non-Hashable benchmark with expectedHash declared: the check
+  -- collapses to .unset (no hash to compare against; matches docs).
+  let r1 := mkResult false true none
+  unless r1.expectedHashCheck == .unset do
+    IO.eprintln s!"non-hashable: expected .unset, got {repr r1.expectedHashCheck}"
+    return 1
+  -- Hashable, hashesAgree=false: any single observation is unsafe;
+  -- expectedHashCheck must fail with .inconsistentAcrossRepeats even
+  -- if observedHash? happens to equal expected.
+  let r2 := mkResult true false (some 0xabcd)
+  unless r2.expectedHashCheck == .inconsistentAcrossRepeats 0xabcd do
+    IO.eprintln s!"disagree+match: expected .inconsistentAcrossRepeats, got {repr r2.expectedHashCheck}"
+    return 1
+  if r2.expectedHashCheck.passed then
+    IO.eprintln "disagree+match: expected NOT passed"
+    return 1
+  -- Hashable, hashesAgree=true, no observed hash (every repeat
+  -- failed before producing one): .noObservedHash, failure.
+  let r3 := mkResult true true none
+  unless r3.expectedHashCheck == .noObservedHash 0xabcd do
+    IO.eprintln s!"no observed: expected .noObservedHash, got {repr r3.expectedHashCheck}"
+    return 1
+  -- Sanity: with no expectedHash declared, the check is .unset
+  -- regardless of observed state.
+  let baseCfgUnset : FixedBenchmarkConfig := {}
+  let r4 : FixedResult :=
+    { function := `dummy, hashable := true, config := baseCfgUnset, points := #[]
+      medianNanos? := none, minNanos? := none, maxNanos? := none
+      hashesAgree := true, observedHash? := some 0xdeadbeef }
+  unless r4.expectedHashCheck == .unset do
+    IO.eprintln s!"unset config: expected .unset, got {repr r4.expectedHashCheck}"
+    return 1
+  return 0
+
+/-- `--ignore-expected-hash` (CLI escape hatch) clears `expectedHash`
+    via the override; a known-wrong expected then no longer fails.
+    Issue #55. -/
+def testIgnoreExpectedHashOverride : IO UInt32 := do
+  let result ← runFixedBenchmark cheapPureRegressedName
+    (override := { ignoreExpectedHash := true })
+  unless result.config.expectedHash.isNone do
+    IO.eprintln "expected override to clear expectedHash"
+    return 1
+  unless result.expectedHashCheck == .unset do
+    IO.eprintln s!"expected .unset under override, got {repr result.expectedHashCheck}"
+    return 1
+  return 0
+
+/-- Wrong `expectedHash` fails `verify` too, not just `run`. Issue #55. -/
+def testExpectedHashVerify : IO UInt32 := do
+  let reports ← verify [cheapPureRegressedName]
+  unless reports.fixed.size == 1 do
+    IO.eprintln s!"expected 1 fixed verify report, got {reports.fixed.size}"
+    return 1
+  let rep := reports.fixed[0]!
+  if rep.passed then
+    IO.eprintln "verify expected to fail on wrong expectedHash, but passed"
+    return 1
+  let rendered := Format.fmtFixedVerifyReport rep
+  unless stringContains rendered "expectedHash mismatch" do
+    IO.eprintln s!"expected 'expectedHash mismatch' in verify render, got:\n{rendered}"
+    return 1
+  return 0
+
 def testFormat : IO UInt32 := do
   -- The list formatter must annotate fixed entries.
   let entries ← allFixedRuntimeEntries
@@ -275,7 +456,14 @@ def runTests : IO UInt32 := do
      ("compare", testCompare),
      ("listAndVerify", testListAndVerify),
      ("killOnCap", testKillOnCap),
-     ("format", testFormat)]
+     ("format", testFormat),
+     ("observedHashSurfaced", testObservedHashSurfaced),
+     ("expectedHashMatch", testExpectedHashMatch),
+     ("expectedHashMismatch", testExpectedHashMismatch),
+     ("expectedHashRoundtrip", testExpectedHashRoundtrip),
+     ("expectedHashCheckProjection", testExpectedHashCheckProjection),
+     ("ignoreExpectedHashOverride", testIgnoreExpectedHashOverride),
+     ("expectedHashVerify", testExpectedHashVerify)]
   do
     let code ← t
     if code != 0 then

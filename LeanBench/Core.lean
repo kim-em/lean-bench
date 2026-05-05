@@ -738,6 +738,15 @@ structure FixedBenchmarkConfig where
   /-- Whether to perform a single discarded warmup call before the
       measured calls. Defaults to true. -/
   warmup            : Bool  := true
+  /-- Expected `Hashable` hash of the benchmark's result. When `some H`,
+      the harness compares the first `ok` repeat's hash against `H`
+      and fails on mismatch. Catches the "regressed to a stable but
+      wrong value" failure mode that the cross-repeat agreement check
+      can't see (e.g. a `Bool` return type whose hash is stable either
+      way). Authors typically leave it `none` on the first run, then
+      copy the printed `observed hash:` value into the `where` clause.
+      Issue #55. -/
+  expectedHash      : Option UInt64 := none
   /-- User-defined tags for organizing benchmarks. Same semantics as
       `BenchmarkConfig.tags` — see issue #10. -/
   tags              : Array String := #[]
@@ -751,6 +760,10 @@ structure FixedConfigOverride where
   maxSecondsPerCall? : Option Float := none
   killGraceMs?       : Option Nat   := none
   warmup?            : Option Bool  := none
+  /-- When `true`, drops `expectedHash` for this run (CLI:
+      `--ignore-expected-hash`). Local-experimentation escape hatch
+      for the issue #55 correctness gate. -/
+  ignoreExpectedHash : Bool         := false
   deriving Inhabited, Repr
 
 /-- Apply overrides on top of a fixed config. `none` keeps the value. -/
@@ -760,7 +773,8 @@ def FixedConfigOverride.apply (o : FixedConfigOverride)
     repeats           := o.repeats?.getD           c.repeats
     maxSecondsPerCall := o.maxSecondsPerCall?.getD c.maxSecondsPerCall
     killGraceMs       := o.killGraceMs?.getD       c.killGraceMs
-    warmup            := o.warmup?.getD            c.warmup }
+    warmup            := o.warmup?.getD            c.warmup
+    expectedHash      := if o.ignoreExpectedHash then none else c.expectedHash }
 
 def FixedBenchmarkConfig.validate (c : FixedBenchmarkConfig) : Except String Unit := do
   unless c.maxSecondsPerCall > 0.0 do
@@ -815,6 +829,11 @@ structure FixedResult where
       was unavailable across the board). False iff repeats disagreed
       — that's a non-determinism bug in the registered function. -/
   hashesAgree  : Bool
+  /-- Hash from the first `ok` repeat. `none` when no repeat
+      succeeded or the value type lacks `Hashable`. Surfaced on every
+      run so authors can copy it into a `where { expectedHash := some
+      0x… }` clause. Issue #55. -/
+  observedHash? : Option UInt64 := none
   /-- Reproducibility metadata captured at parent run start (issue
       #11). Same semantics as on `BenchmarkResult`. -/
   env? : Option Env := none
@@ -823,6 +842,42 @@ structure FixedResult where
       repeats that completed before the deadline. Default `false`. -/
   budgetTruncated : Bool := false
   deriving Inhabited, Repr
+
+/-- Outcome of the `FixedBenchmarkConfig.expectedHash` check. The
+failure variants are `mismatch`, `noObservedHash` (declared but no
+`ok` repeat produced a hash), and `inconsistentAcrossRepeats` (the
+cross-repeat agreement check fired, so a single first-ok comparison
+is meaningless). On a non-`Hashable` benchmark the check collapses
+to `unset` even when `expectedHash` is declared, since the runner
+emits no hash to compare against — caller error, but silently
+ignored to match the "without `Hashable`, neither check applies"
+contract. Issue #55. -/
+inductive ExpectedHashCheck
+  | unset
+  | match
+  | mismatch (expected got : UInt64)
+  | noObservedHash (expected : UInt64)
+  | inconsistentAcrossRepeats (expected : UInt64)
+  deriving Inhabited, Repr, BEq
+
+/-- True iff the check passed or was not declared. Gates the CLI
+exit code. Issue #55. -/
+def ExpectedHashCheck.passed : ExpectedHashCheck → Bool
+  | .unset | .match => true
+  | .mismatch _ _ | .noObservedHash _ | .inconsistentAcrossRepeats _ => false
+
+/-- Pure projection of `config.expectedHash` against `observedHash?`
+and `hashesAgree`. Skipped on non-`Hashable` benchmarks. Issue #55. -/
+def FixedResult.expectedHashCheck (r : FixedResult) : ExpectedHashCheck :=
+  match r.config.expectedHash with
+  | none => .unset
+  | some expected =>
+    if !r.hashable then .unset
+    else if !r.hashesAgree then .inconsistentAcrossRepeats expected
+    else match r.observedHash? with
+      | none      => .noObservedHash expected
+      | some got  =>
+        if got == expected then .match else .mismatch expected got
 
 /-- A single fixed-benchmark divergence record: the per-function
 hash table (one entry per compared function, CLI argument order)
