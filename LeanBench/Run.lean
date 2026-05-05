@@ -72,19 +72,6 @@ def deadlineExceeded? (deadline? : Option BudgetDeadline) : IO Bool := do
     let now ← IO.monoNanosNow
     return now ≥ d
 
-/-- Parse a hex-prefixed UInt64 string like `"0xdeadbeef"`. -/
-private def parseHexU64 (s : String) : Option UInt64 := do
-  guard (s.startsWith "0x")
-  let body := s.drop 2
-  let n := body.foldl (init := 0) fun acc c =>
-    let d :=
-      if c.isDigit then c.toNat - '0'.toNat
-      else if 'a'.toNat ≤ c.toNat ∧ c.toNat ≤ 'f'.toNat then c.toNat - 'a'.toNat + 10
-      else if 'A'.toNat ≤ c.toNat ∧ c.toNat ≤ 'F'.toNat then c.toNat - 'A'.toNat + 10
-      else 0
-    acc * 16 + d
-  return n.toUInt64
-
 /-- Parse the child's JSONL row into a `DataPoint`.
 
 Schema-compatibility contract (see [`doc/schema.md`](../../doc/schema.md)):
@@ -115,7 +102,7 @@ def parseChildRow (line : String) : Except String DataPoint := do
     | .error _ => totalNanos.toFloat / (max 1 innerRepeats).toFloat
   let resultHash : Option UInt64 :=
     match json.getObjVal? "result_hash" with
-    | .ok (.str s) => parseHexU64 s
+    | .ok (.str s) => Schema.parseHexU64 s
     | _ => none
   let statusStr ← json.getObjValAs? String "status"
   let status : Status := match statusStr with
@@ -655,7 +642,7 @@ def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
   let totalNanos ← json.getObjValAs? Nat "total_nanos"
   let resultHash : Option UInt64 :=
     match json.getObjVal? "result_hash" with
-    | .ok (.str s) => parseHexU64 s
+    | .ok (.str s) => Schema.parseHexU64 s
     | _ => none
   let statusStr ← json.getObjValAs? String "status"
   let status : Status := match statusStr with

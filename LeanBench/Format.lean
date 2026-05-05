@@ -46,12 +46,12 @@ def fmtNanosStr (n : Nat) : String :=
   s!"{num} {unit}"
 
 /-- Pad on the left with spaces to width `w` (i.e. right-align). -/
-private def leftpad (s : String) (w : Nat) : String :=
+def leftpad (s : String) (w : Nat) : String :=
   let pad := w - s.length
   if pad > 0 then String.ofList (List.replicate pad ' ') ++ s else s
 
 /-- Pad on the right with spaces to width `w` (i.e. left-align). -/
-private def rightpad (s : String) (w : Nat) : String :=
+def rightpad (s : String) (w : Nat) : String :=
   let pad := w - s.length
   if pad > 0 then s ++ String.ofList (List.replicate pad ' ') else s
 
