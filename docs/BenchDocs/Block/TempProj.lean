@@ -126,13 +126,16 @@ def tempProjFile : CodeBlockExpander
   | args, str => do
     let cfg ← FileConfig.parser.run args
     addFile { path := cfg.path, contents := str.getString }
-    -- Render: a paragraph showing the file path as a code-styled
-    -- inline, followed by the file body as a code block. This keeps
-    -- file blocks visually distinct from the run block's terminal
-    -- output that follows them in the same `::: tempProj` directive.
-    let label := s!"In {cfg.path}:"
+    -- Render: a paragraph reading `In <path>:` (with the path in
+    -- fixed-width via Inline.code), followed by the file body as a
+    -- code block. Keeps file blocks visually distinct from the
+    -- terminal-style run block that follows them.
     return #[
-      ← `(Verso.Doc.Block.para #[Verso.Doc.Inline.text $(quote label)]),
+      ← `(Verso.Doc.Block.para #[
+            Verso.Doc.Inline.text "In ",
+            Verso.Doc.Inline.code $(quote cfg.path),
+            Verso.Doc.Inline.text ":"
+          ]),
       ← `(Verso.Doc.Block.code $(quote str.getString))
     ]
 

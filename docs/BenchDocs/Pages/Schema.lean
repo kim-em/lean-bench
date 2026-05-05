@@ -71,46 +71,91 @@ consumers key on the integer only.
 
 ## Required for both kinds
 
-| key              | type    | meaning |
-|------------------|---------|---------|
-| `schema_version` | integer | Always `1` for v1 rows. |
-| `kind`           | string  | `"parametric"` or `"fixed"`. Readers MUST reject a row whose `kind` mismatches the expected kind for the parser. |
-| `function`       | string  | Fully-qualified Lean name of the registered benchmark. |
-| `total_nanos`    | integer | Wall time in nanoseconds for the measured work. |
-| `status`         | string  | One of `"ok"`, `"timed_out"`, `"killed_at_cap"`, `"error"`. |
+::: table +header
+* * key
+  * type
+  * meaning
+* * `schema_version`
+  * integer
+  * Always `1` for v1 rows.
+* * `kind`
+  * string
+  * `"parametric"` or `"fixed"`. Readers MUST reject a row whose `kind` mismatches the expected kind for the parser.
+* * `function`
+  * string
+  * Fully-qualified Lean name of the registered benchmark.
+* * `total_nanos`
+  * integer
+  * Wall time in nanoseconds for the measured work.
+* * `status`
+  * string
+  * One of `"ok"`, `"timed_out"`, `"killed_at_cap"`, `"error"`.
+:::
 
 ## Required for `parametric` only
 
-| key              | type    | meaning |
-|------------------|---------|---------|
-| `param`          | integer | Ladder parameter the function was invoked with. |
-| `inner_repeats`  | integer | Auto-tuned inner repeat count. `0` on synthesized error rows. |
+::: table +header
+* * key
+  * type
+  * meaning
+* * `param`
+  * integer
+  * Ladder parameter the function was invoked with.
+* * `inner_repeats`
+  * integer
+  * Auto-tuned inner repeat count. `0` on synthesized error rows.
+:::
 
 ## Required for `fixed` only
 
-| key              | type    | meaning |
-|------------------|---------|---------|
-| `repeat_index`   | integer | 0-based index across the configured `repeats`. |
+::: table +header
+* * key
+  * type
+  * meaning
+* * `repeat_index`
+  * integer
+  * 0-based index across the configured `repeats`.
+:::
 
 ## Optional fields (both kinds)
 
 These are emitted today. Readers MUST treat absence as if the
 field were `null`.
 
-| key                | type             | meaning |
-|--------------------|------------------|---------|
-| `result_hash`      | string \| null   | Hex-prefixed `0xDEADBEEF` literal (case-insensitive). `null` when the function's return type lacks `Hashable`. |
-| `error`            | string \| null   | Free-form message for `status == "error"`. `null` otherwise. |
-| `env`              | object \| null   | Reproducibility metadata captured at child startup — see the Environment metadata section below. Emitted on every row by current writers. |
-| `alloc_bytes`      | integer \| null  | Total bytes allocated by the Lean runtime over the child's lifetime. Always `null` today — Lean 4 has no portable in-process API to read this. The key is reserved so the field can land additively when a future Lean release exposes allocation counters. |
-| `peak_rss_kb`      | integer \| null  | Peak resident-set size of the child process, in kibibytes (1024 bytes). On Linux read from `/proc/self/status` (`VmHWM:`); `null` on macOS, Windows, and any other platform without `/proc`. |
+::: table +header
+* * key
+  * type
+  * meaning
+* * `result_hash`
+  * string | null
+  * Hex-prefixed `0xDEADBEEF` literal (case-insensitive). `null` when the function's return type lacks `Hashable`.
+* * `error`
+  * string | null
+  * Free-form message for `status == "error"`. `null` otherwise.
+* * `env`
+  * object | null
+  * Reproducibility metadata captured at child startup — see the Environment metadata section below. Emitted on every row by current writers.
+* * `alloc_bytes`
+  * integer | null
+  * Total bytes allocated by the Lean runtime over the child's lifetime. Always `null` today — Lean 4 has no portable in-process API to read this. The key is reserved so the field can land additively when a future Lean release exposes allocation counters.
+* * `peak_rss_kb`
+  * integer | null
+  * Peak resident-set size of the child process, in kibibytes (1024 bytes). On Linux read from `/proc/self/status` (`VmHWM:`); `null` on macOS, Windows, and any other platform without `/proc`.
+:::
 
 ## Optional fields (parametric only)
 
-| key                | type             | meaning |
-|--------------------|------------------|---------|
-| `per_call_nanos`   | number \| null   | `total_nanos / inner_repeats` precomputed. Derived; readers MAY recompute it from `total_nanos` and `inner_repeats` when absent. Emitted as `null` on synthesized error / killed-at-cap rows where `inner_repeats == 0` (a real division-by-zero), to keep every emitted row valid JSON. |
-| `cache_mode`       | string           | `"warm"` (auto-tuned inner repeats inside one child, the v0.1 default) or `"cold"` (single untuned invocation; the parent respawns the child for every ladder rung). See [the Cache-modes section of the Advanced page](https://kim-em.github.io/lean-bench/Advanced/Cache-modes/). |
+::: table +header
+* * key
+  * type
+  * meaning
+* * `per_call_nanos`
+  * number | null
+  * `total_nanos / inner_repeats` precomputed. Derived; readers MAY recompute it from `total_nanos` and `inner_repeats` when absent. Emitted as `null` on synthesized error / killed-at-cap rows where `inner_repeats == 0` (a real division-by-zero), to keep every emitted row valid JSON.
+* * `cache_mode`
+  * string
+  * `"warm"` (auto-tuned inner repeats inside one child, the v0.1 default) or `"cold"` (single untuned invocation; the parent respawns the child for every ladder rung). See [the Cache-modes section of the Advanced page](https://kim-em.github.io/lean-bench/Advanced/Cache-modes/).
+:::
 
 ## Reserved-for-future-use fields
 
@@ -157,22 +202,53 @@ emit every key. Fields with no available value land as JSON
 is "Missing metadata is handled explicitly rather than silently
 omitted."
 
-| key                  | type            | meaning |
-|----------------------|-----------------|---------|
-| `lean_version`       | string          | `Lean.versionString` — e.g. `"4.30.0-rc2"`. |
-| `lean_toolchain`     | string          | `Lean.toolchain` — matches the `lean-toolchain` file. |
-| `platform_target`    | string          | LLVM target triple. Empty string when missing at compile time. |
-| `os`                 | string          | Coarse OS family: `"linux"` / `"macos"` / `"windows"` / `"emscripten"`. |
-| `arch`               | string \| null  | Architecture parsed from the target triple's leading segment. |
-| `cpu_model`          | string \| null  | Linux: from `/proc/cpuinfo`. macOS / Windows: `null` (best-effort, not yet probed). |
-| `cpu_cores`          | integer \| null | Logical core count. Linux: `/proc/cpuinfo`. Windows: `NUMBER_OF_PROCESSORS` env. |
-| `hostname`           | string \| null  | `hostname(1)` or env-var fallback (`HOSTNAME` / `COMPUTERNAME`). |
-| `exe_name`           | string          | Basename of the running executable. |
-| `lean_bench_version` | string          | `LeanBench.libraryVersion`. |
-| `git_commit`         | string \| null  | Full 40-char SHA from `git rev-parse HEAD` at cwd. `null` when git is unavailable. |
-| `git_dirty`          | bool \| null    | True iff `git status --porcelain` was non-empty. `null` distinguishes "no git" from "clean tree". |
-| `timestamp_unix_ms`  | integer         | Wallclock at capture, ms since Unix epoch. |
-| `timestamp_iso`      | string          | Wallclock at capture, ISO 8601 UTC (`"YYYY-MM-DDTHH:MM:SSZ"`). |
+::: table +header
+* * key
+  * type
+  * meaning
+* * `lean_version`
+  * string
+  * `Lean.versionString` — e.g. `"4.30.0-rc2"`.
+* * `lean_toolchain`
+  * string
+  * `Lean.toolchain` — matches the `lean-toolchain` file.
+* * `platform_target`
+  * string
+  * LLVM target triple. Empty string when missing at compile time.
+* * `os`
+  * string
+  * Coarse OS family: `"linux"` / `"macos"` / `"windows"` / `"emscripten"`.
+* * `arch`
+  * string | null
+  * Architecture parsed from the target triple's leading segment.
+* * `cpu_model`
+  * string | null
+  * Linux: from `/proc/cpuinfo`. macOS / Windows: `null` (best-effort, not yet probed).
+* * `cpu_cores`
+  * integer | null
+  * Logical core count. Linux: `/proc/cpuinfo`. Windows: `NUMBER_OF_PROCESSORS` env.
+* * `hostname`
+  * string | null
+  * `hostname(1)` or env-var fallback (`HOSTNAME` / `COMPUTERNAME`).
+* * `exe_name`
+  * string
+  * Basename of the running executable.
+* * `lean_bench_version`
+  * string
+  * `LeanBench.libraryVersion`.
+* * `git_commit`
+  * string | null
+  * Full 40-char SHA from `git rev-parse HEAD` at cwd. `null` when git is unavailable.
+* * `git_dirty`
+  * bool | null
+  * True iff `git status --porcelain` was non-empty. `null` distinguishes "no git" from "clean tree".
+* * `timestamp_unix_ms`
+  * integer
+  * Wallclock at capture, ms since Unix epoch.
+* * `timestamp_iso`
+  * string
+  * Wallclock at capture, ISO 8601 UTC (`"YYYY-MM-DDTHH:MM:SSZ"`).
+:::
 
 The order writers emit these keys in is fixed by
 `LeanBench.RunEnv.toJson` and pinned by the schema-stability test;
@@ -192,10 +268,20 @@ sit alongside `total_nanos` so a regression that preserves
 wall-clock time but allocates more memory or balloons RSS is still
 visible.
 
-| field         | unit       | source                                                 | available on    |
-|---------------|------------|--------------------------------------------------------|-----------------|
-| `alloc_bytes` | bytes      | not yet captured — Lean 4 has no portable in-process API | nowhere today |
-| `peak_rss_kb` | kibibytes  | `/proc/self/status` `VmHWM:` line, read by the child   | Linux           |
+::: table +header
+* * field
+  * unit
+  * source
+  * available on
+* * `alloc_bytes`
+  * bytes
+  * not yet captured — Lean 4 has no portable in-process API
+  * nowhere today
+* * `peak_rss_kb`
+  * kibibytes
+  * `/proc/self/status` `VmHWM:` line, read by the child
+  * Linux
+:::
 
 Interpretation:
 
@@ -289,13 +375,26 @@ The *export format* is a separate, user-facing JSON document
 produced by `--export FILE` on `run` and `compare`. It is
 distinct from the JSONL wire format described above:
 
-| aspect | JSONL wire format | Export format |
-|--------|-------------------|--------------|
-| scope | one row per child invocation | one document per `run` / `compare` |
-| audience | internal (child → parent) | external (CI, dashboards, baselines) |
-| structure | newline-delimited JSON objects | single JSON object |
-| version key | `schema_version` | `export_schema_version` |
-| source of truth | `LeanBench/Schema.lean` | `LeanBench/Export.lean` |
+::: table +header
+* * aspect
+  * JSONL wire format
+  * Export format
+* * scope
+  * one row per child invocation
+  * one document per `run` / `compare`
+* * audience
+  * internal (child → parent)
+  * external (CI, dashboards, baselines)
+* * structure
+  * newline-delimited JSON objects
+  * single JSON object
+* * version key
+  * `schema_version`
+  * `export_schema_version`
+* * source of truth
+  * `LeanBench/Schema.lean`
+  * `LeanBench/Export.lean`
+:::
 
 The two version counters are independent. Changes to the JSONL
 wire format do not force a bump of `export_schema_version`, and

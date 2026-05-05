@@ -14,8 +14,7 @@ reference-counted allocation, structural sharing, ahead-of-time
 compilation versus elaborator evaluation — has enough sharp edges
 that a benchmark can silently measure something other than the
 algorithm you wrote down. This guide walks through the failure
-modes we have hit ourselves, each with a concrete example you can
-run.
+modes we have hit ourselves.
 
 `lean-bench` papers over some of these (it forces every result,
 hashes when it can, and runs in a clean child process for each
@@ -178,7 +177,7 @@ diverge at named triples. A function whose return type is not
 runs, but you lose the cross-implementation correctness check.
 Prefer `Hashable`-bearing return types when you have a choice.
 
-# Allocation, sharing, and reference counting
+# Allocation and sharing
 
 Lean uses reference counting with destructive update for unique
 references. This matters two different ways for benchmarks.

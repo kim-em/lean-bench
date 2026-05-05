@@ -91,7 +91,7 @@ So the child does:
 *after* startup and stops *before* JSONL emission, so all the
 parent-side / startup / IPC overhead is excluded.
 
-# Dual registry (env extension + IO.Ref)
+# Dual registry
 
 Two parallel registries, both populated by a single
 `LeanBench.register` call emitted by the `setup_benchmark` macro:
@@ -128,7 +128,7 @@ in the user's `.olean`.
 instance, else `none` after forcing the result. Uniform type
 avoids type-level branching leaking through the design.
 
-# What is not in v0.1
+# What we left out
 
 - *Elaboration-time subprocess sanity check* ("does `f 0` finish
   in < 1s?"). Considered and rejected: it makes the elaborator

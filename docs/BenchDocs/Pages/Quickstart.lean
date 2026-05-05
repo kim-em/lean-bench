@@ -9,11 +9,7 @@ open BenchDocs.Block
 
 #doc (Manual) "Quickstart" =>
 
-A complete benchmark project in three files. The project below is
-materialised in a temporary directory and built end-to-end at
-doc-build time, so a downstream user following these steps will see
-exactly what this page shows — any drift in the lean-bench API or
-the lakefile.toml conventions fails CI here first.
+A complete benchmark project in three files.
 
 ::: tempProj (tag := "myproject-3files")
 
@@ -55,12 +51,6 @@ registered benchmarks:
 ```
 
 :::
-
-When CI builds this doc, the `git`+`rev` lines above are transparently
-swapped for a `path` require pointing at the local lean-bench checkout
-under test, so the example compiles against the in-tree code rather
-than chasing the remote. Downstream readers see the form they would
-write in their own project.
 
 # Build and run
 
@@ -111,6 +101,9 @@ partial def bsearch (a : Array Nat) (target : Nat) : Option Nat := Id.run do
 
 def runBinary (input : Array Nat × Nat) : Nat :=
   (bsearch input.1 input.2).getD 0
+
+setup_benchmark runBinary n => Nat.log2 (n + 1)
+  with prep := prepInput
 ```
 
 Type contract: `prep : Nat → σ` and the benchmarked function has type
@@ -125,14 +118,22 @@ inner loop calls the function with the prepared value.
 The complexity expression on the right of `=>` has type `Nat → Nat`.
 Pick whichever expression best models the algorithm:
 
-| Asymptotic | Lean expression          |
-|------------|--------------------------|
-| O(1)       | `1`                      |
-| O(n)       | `n`                      |
-| O(n log n) | `n * Nat.log2 (n + 1)`   |
-| O(n²)      | `n * n`                  |
-| O(n³)      | `n * n * n`              |
-| O(2ⁿ)      | `2 ^ n`                  |
+::: table +header
+* * Asymptotic
+  * Lean expression
+* * O(1)
+  * `1`
+* * O(n)
+  * `n`
+* * O(n log n)
+  * `n * Nat.log2 (n + 1)`
+* * O(n²)
+  * `n * n`
+* * O(n³)
+  * `n * n * n`
+* * O(2ⁿ)
+  * `2 ^ n`
+:::
 
 `Nat.log2` is in core Lean. The `+ 1` in the `n log n` row guards
 against `log2 0 = 0` producing a zero denominator in the ratio.
@@ -166,22 +167,56 @@ Tags are arbitrary strings. A benchmark can have zero or more tags.
 Benchmarks without tags work exactly as before — the feature is
 fully opt-in.
 
+Fixed benchmarks support tags too:
+
+```lean
+def heavyComputation : Nat := 42
+
+setup_fixed_benchmark heavyComputation where {
+  tags := #["regression"]
+  repeats := 10
+}
+```
+
 All parent-side subcommands (`list`, `run`, `compare`, `verify`)
 accept `--tag` and `--filter` flags:
 
-| Flag | Semantics |
-|------|-----------|
-| `--tag sort` | Benchmarks with the `sort` tag |
-| `--tag sort,fib` | Benchmarks with `sort` OR `fib` (OR logic) |
-| `--filter Sort` | Benchmarks whose name contains `Sort` |
-| `--tag sort --filter Insert` | Both conditions must match (AND) |
+::: table +header
+* * Flag
+  * Semantics
+* * `--tag sort`
+  * Benchmarks with the `sort` tag
+* * `--tag sort,fib`
+  * Benchmarks with `sort` OR `fib` (OR logic)
+* * `--filter Sort`
+  * Benchmarks whose name contains `Sort`
+* * `--tag sort --filter Insert`
+  * Both conditions must match (AND)
+:::
 
 When no `--tag` or `--filter` is given, all benchmarks are included.
 Name filtering matches anywhere in the fully-qualified dotted name,
 so `--filter Sort` matches `MyProject.Sort.runMergeSort`.
 
 Lean namespaces naturally provide hierarchical grouping. Combined
-with `--filter`, this gives you namespace-based filtering for free.
+with `--filter`, this gives you namespace-based filtering for free:
+
+```lean
+namespace MySort
+  def runInsertionA (_ : Nat) : Nat := 0
+  def runMergeSortA (_ : Nat) : Nat := 0
+  setup_benchmark runInsertionA n => n * n
+  setup_benchmark runMergeSortA n => n * Nat.log2 (n + 1)
+end MySort
+
+namespace MyFib
+  def goodFibA (_ : Nat) : Nat := 0
+  def badFibA  (_ : Nat) : Nat := 0
+  setup_benchmark goodFibA n => n
+  setup_benchmark badFibA  n => 144 ^ n / 89 ^ n
+end MyFib
+```
+
 Tags and namespaces are complementary: namespaces give you
 hierarchical grouping, tags give you cross-cutting categories
 (e.g. `"fast"`, `"regression"`, `"nightly"`).
@@ -233,11 +268,16 @@ entry in `results[]` also carries `"budget_truncated": true|false`.
 `run` and `compare` use distinct non-zero codes so CI can react
 without parsing stdout:
 
-| code | meaning |
-|------|---------|
-| `0`  | success — the run completed and (with `--baseline`) no regressions were flagged |
-| `1`  | a regression vs. the baseline was flagged, or argument validation / dispatch errored |
-| `2`  | the parametric run produced *zero verdict-eligible rows* |
+::: table +header
+* * code
+  * meaning
+* * `0`
+  * success — the run completed and (with `--baseline`) no regressions were flagged
+* * `1`
+  * a regression vs. the baseline was flagged, or argument validation / dispatch errored
+* * `2`
+  * the parametric run produced *zero verdict-eligible rows*
+:::
 
 Code `2` is the right signal to fail-loud on rather than swallow:
 the verdict text would otherwise read `inconclusive (cMin=—,
@@ -272,18 +312,41 @@ JSON-style numbers (`0.5`, `1e-3`, `3`); `+1`, `.5`, and `1.` are
 
 Available flags:
 
-| Flag                     | Type           | `BenchmarkConfig` field   |
-|--------------------------|----------------|---------------------------|
-| `--max-seconds-per-call` | Float          | `maxSecondsPerCall`       |
-| `--target-inner-nanos`   | Nat            | `targetInnerNanos`        |
-| `--param-floor`          | Nat            | `paramFloor`              |
-| `--param-ceiling`        | Nat            | `paramCeiling`            |
-| `--warmup-fraction`      | Float          | `verdictWarmupFraction`   |
-| `--slope-tolerance`      | Float          | `slopeTolerance`          |
-| `--param-schedule`       | ParamSchedule  | `paramSchedule`           |
-| `--cache-mode`           | CacheMode      | `cacheMode`               |
-| `--outer-trials`         | Nat            | `outerTrials`             |
-| `--auto-fit`             | (boolean flag) | (heuristic — see below)   |
+::: table +header
+* * Flag
+  * Type
+  * `BenchmarkConfig` field
+* * `--max-seconds-per-call`
+  * Float
+  * `maxSecondsPerCall`
+* * `--target-inner-nanos`
+  * Nat
+  * `targetInnerNanos`
+* * `--param-floor`
+  * Nat
+  * `paramFloor`
+* * `--param-ceiling`
+  * Nat
+  * `paramCeiling`
+* * `--warmup-fraction`
+  * Float
+  * `verdictWarmupFraction`
+* * `--slope-tolerance`
+  * Float
+  * `slopeTolerance`
+* * `--param-schedule`
+  * ParamSchedule
+  * `paramSchedule`
+* * `--cache-mode`
+  * CacheMode
+  * `cacheMode`
+* * `--outer-trials`
+  * Nat
+  * `outerTrials`
+* * `--auto-fit`
+  * (boolean flag)
+  * (heuristic — see below)
+:::
 
 `--param-schedule` accepts `auto` (default), `doubling`, or `linear`.
 `--cache-mode warm|cold` selects what is being measured. The default
@@ -348,14 +411,22 @@ Pass `--auto-fit` on `run` (or `compare`) to see this. After the
 standard verdict block, the report prints a ranked list of catalog
 models by goodness-of-fit. The catalog is fixed:
 
-| Catalog entry            | What it represents     |
-|--------------------------|------------------------|
-| `1`                      | constant time          |
-| `n`                      | linear                 |
-| `n * Nat.log2 (n + 1)`   | linearithmic           |
-| `n^2`                    | quadratic              |
-| `n^3`                    | cubic                  |
-| `2^n`                    | exponential            |
+::: table +header
+* * Catalog entry
+  * What it represents
+* * `1`
+  * constant time
+* * `n`
+  * linear
+* * `n * Nat.log2 (n + 1)`
+  * linearithmic
+* * `n^2`
+  * quadratic
+* * `n^3`
+  * cubic
+* * `2^n`
+  * exponential
+:::
 
 The ranking score is `stdLogC` — the standard deviation of `log C`
 across the verdict-eligible rungs, where `C = perCallNanos / model(param)`.
@@ -371,6 +442,23 @@ The arrow tags the best fit only when the verdict is *decisive* —
 1.5× the winner's. On a narrow ladder where adjacent catalog
 entries can't be separated, no arrow is drawn and a `‼ inconclusive`
 line names the reason.
+
+The catalog labels are exactly the strings you would write after
+`=>` in `setup_benchmark`, so adopting the suggestion is mechanical:
+
+```lean
+def myFibA (_ : Nat) : Nat := 0
+
+-- Before
+setup_benchmark myFibA n => 1
+```
+
+```lean
+def myFibB (_ : Nat) : Nat := 0
+
+-- After (auto-fit suggested `n`)
+setup_benchmark myFibB n => n
+```
 
 This is a heuristic, not a proof. The catalog is fixed at six
 entries, so anything not in the catalog gets the closest neighbour;
@@ -432,9 +520,14 @@ the workload reads input from disk or shells out to an external
 tool):
 
 ```lean
-def heavyComputation : Nat := 42
+def factorXOverFTwo : Nat := 42  -- in real code: a single hard problem
+setup_fixed_benchmark factorXOverFTwo
 
-setup_fixed_benchmark heavyComputation
+def runFplll : IO Nat := pure 42  -- in real code: shell out to an external tool
+setup_fixed_benchmark runFplll where {
+  repeats := 10
+  maxSecondsPerCall := 30.0
+}
 ```
 
 There is no `Nat` parameter, no complexity expression, and no
@@ -445,12 +538,23 @@ repeats — a divergence flags a non-deterministic registration.
 
 `FixedBenchmarkConfig` knobs:
 
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `repeats` | `5` | Number of measured invocations after the warmup |
-| `maxSecondsPerCall` | `60.0` | Hard wallclock cap per invocation (seconds) |
-| `killGraceMs` | `100` | Grace ms between SIGTERM and SIGKILL |
-| `warmup` | `true` | Whether to perform a single discarded warmup call |
+::: table +header
+* * Field
+  * Default
+  * Purpose
+* * `repeats`
+  * `5`
+  * Number of measured invocations after the warmup
+* * `maxSecondsPerCall`
+  * `60.0`
+  * Hard wallclock cap per invocation (seconds)
+* * `killGraceMs`
+  * `100`
+  * Grace ms between SIGTERM and SIGKILL
+* * `warmup`
+  * `true`
+  * Whether to perform a single discarded warmup call
+:::
 
 The CLI flag `--repeats N` overrides the declared `repeats` per run;
 `--max-seconds-per-call` is shared with parametric. Parametric-only
