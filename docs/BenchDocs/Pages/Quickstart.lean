@@ -271,25 +271,51 @@ flight when the deadline trips. There is no in-rung kill: a
 benchmark with a 30s `maxSecondsPerCall` can blow past a 5s budget
 by up to 30s. Tighten the per-call cap if you need a tighter bound.
 
-A budgeted run prints a one-line summary at the bottom plus a
-bullet per skipped benchmark. With `--total-seconds 0` the deadline
-trips before any benchmark starts, so every selected benchmark is
-recorded as a `budget_skip`:
+A budgeted run prints each benchmark's normal report as it lands,
+plus a one-line budget summary at the bottom and a bullet per
+skipped benchmark. A realistic 60-second suite with seven
+parametric benchmarks tagged `regression`:
 
-```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "run --tag fib --total-seconds 0") (normalise := "skipBlank")
-budget: 0.000s; elapsed 0.000s; completed 0, skipped 2
-  [budget skip] LeanBench.Examples.Fib.goodFib    [parametric]
-  [budget skip] LeanBench.Examples.Fib.badFib    [parametric]
-```
+```benchTranscript (caption := "lake exe my_benchmarks run --tag regression --total-seconds 60")
+$ lake exe my_benchmarks run --tag regression --total-seconds 60
+MyProject.Hash.murmur3        expected complexity: n           [warm cache]
+  env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=ab12cd, 2026-05-04T18:02:11Z, host=ci-runner-7
+  param  per-call    repeats  C
+     16   12.2 ns    ×2^21    C= —     [<floor] †
+     32   24.1 ns    ×2^21    C= —     [<floor] †
+     64   47.9 ns    ×2^21    C= 0.748
+    128   95.0 ns    ×2^20    C= 0.742
+    256    188 ns    ×2^19    C= 0.734
+    512    374 ns    ×2^18    C= 0.730
+  1_024    742 ns    ×2^17    C= 0.725
+  2_048  1.49 µs    ×2^16    C= 0.727
+  verdict: consistent with declared complexity (cMin=0.725, cMax=0.748, β=0.005)
+  per-spawn floor (harness self-measurement): 1.4 ms
 
-A real (non-zero) budget produces the same shape with `completed`
-and `truncated` populated:
+… five more benchmarks reported similarly …
 
-```
+MyProject.Sort.heapSort       expected complexity: n * Nat.log2 (n + 1)    [warm cache, budget truncated]
+  param  per-call    repeats  C
+     16    302 ns    ×2^16    C= 4.71 †
+     32    684 ns    ×2^15    C= 4.27
+     64  1.51 µs    ×2^14    C= 3.93
+    128  3.32 µs    ×2^13    C= 3.71
+  verdict: consistent with declared complexity (cMin=3.71, cMax=4.27, β=-0.038)
+  per-spawn floor (harness self-measurement): 1.4 ms
+
 budget: 60.000s; elapsed 58.910s; completed 7, skipped 2, truncated 1
   [budget skip] MyProject.Sort.runMergeSort    [parametric]
   [budget skip] MyProject.Sort.runInsertion    [parametric]
 ```
+
+Each completed benchmark gets its full report (ladder + verdict +
+per-spawn floor); the one whose ladder was cut off mid-flight is
+tagged `[budget truncated]` on its header and stops at the last
+rung that finished before the deadline. The two `[budget skip]`
+bullets at the bottom name benchmarks that didn't get to start at
+all. `completed 7` and `truncated 1` overlap: the truncated
+benchmark is one of the seven that completed (it just stopped
+early).
 
 When `--export-file FILE` is also passed, the export document gains
 a top-level `budget` object describing what happened. Each result
@@ -405,33 +431,35 @@ by config validation.
 
 # Reading the output
 
-Per-data-point ratio `C = perCallNanos / complexity(param)`. If your
-declared complexity matches the implementation, `C` is approximately
-constant. The verdict fits the log-log slope β of `C` vs `param`
-over the trimmed tail: "consistent with declared complexity" when
-`|β| ≤ 0.15`, otherwise "inconclusive". β is printed on the verdict
-line; its sign tells you the direction of any mismatch (positive →
-actually slower than declared, negative → actually faster).
+Each row of the report is a per-call wall time at one rung of the
+ladder. The `C` column is the unit-cost ratio
+`C = perCallNanos / complexity(param)`. When the declared
+complexity matches reality, `C` is approximately constant across
+the ladder; when it doesn't, `C` drifts. The verdict line is a
+log-log slope check on `C` vs `param`: `|β| ≤ 0.15` reads
+"consistent with declared complexity", anything wider reads
+"inconclusive". β's sign tells you the direction — positive means
+actually slower than declared, negative means actually faster.
 
-The harness prints its own per-spawn floor as part of the report.
-Any data point with `total_nanos` smaller than
-`signalFloorMultiplier × spawn_floor` (default 10×) is flagged with
-`[<floor]` in the table and excluded from the verdict — its per-call
-time is dominated by subprocess-spawn cost, not the function under
-test.
+The harness self-measures its per-spawn overhead and prints it
+under the verdict as `per-spawn floor`. Any rung whose total
+sample is shorter than `signalFloorMultiplier × spawn_floor`
+(default 10×) is dominated by subprocess startup rather than the
+function, so its per-call number is meaningless; those rows are
+tagged `[<floor]` and dropped from the verdict.
 
-When the harness can't trust the data — every row was below the
-floor, every row hit the cap, the ladder was truncated by the cap,
-or fewer than three rows survived the verdict reduction — it
-appends one or more `‼` advisory lines after the verdict, each
-naming a concrete knob to turn next (`--max-seconds-per-call`,
+If too few rungs land — every row is below the floor, every row
+hits the cap, the ladder was truncated mid-flight, or fewer than
+three rows survive the warmup-trim plus signal-floor filter — the
+report can't compute a verdict, and `‼` advisory lines appear
+naming concrete knobs to turn next (`--max-seconds-per-call`,
 `--param-ceiling`, `paramSchedule := .custom #[...]`,
 `setup_fixed_benchmark`, …).
 
-A real (consistent) `goodFib` run with a wide ladder, on stable
-hardware. The trimmed-warmup region is marked with `†`, signal-floor
-exclusions with `[<floor]`, and the verdict line carries `cMin`,
-`cMax`, and the log-log slope `β`:
+A wide-ladder `goodFib` run, on stable hardware, gives a
+consistent verdict. `†` flags the warmup-trim region (excluded
+from the slope fit); `[<floor]` flags rungs dominated by spawn
+overhead; the verdict line reports `cMin`, `cMax`, and `β`:
 
 ```benchTranscript (caption := "lake exe fib_benchmark_example run goodFib (consistent verdict)")
 $ lake exe fib_benchmark_example run goodFib --param-ceiling 4096 --max-seconds-per-call 1
@@ -456,17 +484,16 @@ LeanBench.Examples.Fib.goodFib    expected complexity: n    [warm cache]
   per-spawn floor (harness self-measurement): 33.998 ms
 ```
 
-`β=-0.065` is well inside the `|β| ≤ 0.15` band, so the verdict is
-"consistent". Reading the table: per-call time grows roughly
-linearly with `param` once you're out of the cold regime; `C`
-stabilises near 15 ns once the per-spawn overhead amortises. The
-two `[<floor]` rows on this ladder are pure noise — their batches
-were too short for the timer's resolution above the floor — and
-correctly drop out of the verdict.
+`β=-0.065` sits inside the `|β| ≤ 0.15` band, so the verdict
+reads "consistent". The table tells the same story: per-call time
+grows roughly linearly with `param` once spawn overhead amortises,
+and `C` stabilises near 15 ns. The two `[<floor]` rungs are
+batches that ran shorter than 10× the spawn floor — pure noise,
+and correctly dropped from the slope fit.
 
-A tighter ladder on the same benchmark, where the cap fires before
-real timing data accumulates, gives the opposite signal. Note the
-`‼` advisories at the bottom telling you which knob to turn next:
+The opposite case: a tight ladder where the cap fires before any
+real ladder data accumulates. The verdict reads "inconclusive"
+and the `‼` advisories name the knob to turn:
 
 ```benchTranscript (caption := "lake exe fib_benchmark_example run goodFib (inconclusive — under-resolved)")
 $ lake exe fib_benchmark_example run goodFib --param-ceiling 16 --max-seconds-per-call 0.5 --signal-floor-multiplier 1.0
@@ -483,12 +510,14 @@ LeanBench.Examples.Fib.goodFib    expected complexity: n    [warm cache]
   per-spawn floor (harness self-measurement): 32.899 ms
 ```
 
-`β=-0.433` is well outside `|β| ≤ 0.15`, so the verdict is
-"inconclusive" with a directional hint ("looks faster than declared
-by ~n^0.433"). On this ladder the small-`n` regime is dominated by
-per-call setup costs, dragging `C` down across rungs; widening the
-ladder (`--param-ceiling`) lets the asymptotic linear cost dominate
-and the verdict tip back to consistent (as in the previous example).
+`β=-0.433` sits well outside the band, so the verdict reads
+"inconclusive" with a directional hint ("looks faster than
+declared by ~n^0.433"). It's a calibration failure, not a bug:
+at small `n` the per-call setup dominates the linear algorithm,
+dragging `C` down across rungs. Widening the ladder
+(`--param-ceiling`) lets the asymptotic cost win and tips the
+verdict back to consistent — exactly what the previous example
+shows.
 
 # Auto-fit
 
