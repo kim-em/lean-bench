@@ -129,7 +129,7 @@ def parseChildRow (line : String) : Except String DataPoint := do
 /-- Synthesize a row when the child died before emitting. -/
 def synthRow (param : Nat) (status : Status) : DataPoint :=
   { param, innerRepeats := 0, totalNanos := 0, perCallNanos := 0.0
-  , resultHash := none, status, partOfVerdict := true }
+  , resultHash := none, status }
 
 /-- Pure classifier for the post-spawn outcome of a child run. Folds
     `(exit, stdout, stderr, wasKilled)` into a `DataPoint` using exactly
