@@ -47,9 +47,7 @@ private def snapshot (label expected actual : String) : IO UInt32 := do
 
 private def sampleSpec : BenchmarkSpec :=
   { name := `Sample.linearFn
-  , complexityName := `Sample.linearFn._leanBench_complexity
   , complexityFormula := "n"
-  , runCheckedName := `Sample.linearFn._leanBench_runChecked
   , hashable := true
   , config := {} }
 
@@ -58,7 +56,6 @@ private def sampleNoHashSpec : BenchmarkSpec :=
 
 private def sampleFixedSpec : FixedSpec :=
   { name := `Sample.cheap
-  , runnerName := `Sample.cheap._leanBench_runner
   , hashable := true
   , config := { repeats := 3 } }
 

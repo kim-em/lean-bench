@@ -52,9 +52,7 @@ private def mkErrorPoint (param : Nat) (msg : String) : DataPoint :=
 
 private def hashableSpec : BenchmarkSpec :=
   { name := `dummyHashable
-  , complexityName := `dummy_complexity
   , complexityFormula := "<dummy>"
-  , runCheckedName := `dummy_run
   , hashable := true
   , config := {} }
 
@@ -113,9 +111,7 @@ def testHappyPath : IO UInt32 := do
 def testEndToEndFailure : IO UInt32 := do
   let bogusSpec : BenchmarkSpec :=
     { name := Lean.Name.mkSimple "definitely.not.registered"
-    , complexityName := `dummy_complexity
     , complexityFormula := "<dummy>"
-    , runCheckedName := `dummy_run
     , hashable := true
     , config := {} }
   let report ← verifyOne bogusSpec

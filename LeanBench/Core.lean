@@ -456,27 +456,14 @@ def BenchmarkConfig.validate (c : BenchmarkConfig) : Except String Unit := do
   | _ => pure ()
   pure ()
 
-/-- One entry in the benchmark registry. Stored as `Name`s plus a
-printable copy of the complexity formula; neither `Syntax` nor `Expr`,
-sidestepping serialization issues. -/
+/-- One entry in the benchmark registry. -/
 structure BenchmarkSpec where
   /-- The function under test. -/
   name             : Lean.Name
-  /-- Auto-generated `Nat → Nat` complexity model. -/
-  complexityName   : Lean.Name
   /-- Pretty-printed source of the complexity expression (e.g. `"2 ^ n"`),
       captured at `setup_benchmark` time so `list` can show the formula
       the user wrote rather than the internal helper name. -/
   complexityFormula : String
-  /-- Auto-generated `Nat → IO (Option UInt64)` runner. -/
-  runCheckedName   : Lean.Name
-  /-- Auto-generated `BenchmarkConfig` def carrying any
-      `where { ... }` overrides applied at declaration time.
-      Compile-time tooling that walks the persistent registry can
-      resolve this constant against the environment to recover the
-      declared config; the runtime registry already has it as a
-      value. -/
-  configDeclName   : Lean.Name := Lean.Name.anonymous
   /-- True iff the function's return type has a `Hashable` instance;
       hashing is enabled in `runChecked` only when this is set. -/
   hashable         : Bool
@@ -786,12 +773,6 @@ def FixedBenchmarkConfig.validate (c : FixedBenchmarkConfig) : Except String Uni
 structure FixedSpec where
   /-- The registered value. -/
   name              : Lean.Name
-  /-- Auto-generated runner that performs one timed invocation and
-      returns `(totalNanos, resultHash?)`. -/
-  runnerName        : Lean.Name
-  /-- Auto-generated `FixedBenchmarkConfig` def carrying any
-      `where { ... }` overrides applied at declaration time. -/
-  configDeclName    : Lean.Name := Lean.Name.anonymous
   /-- True iff the registered value's underlying type has a
       `Hashable` instance. -/
   hashable          : Bool
