@@ -75,6 +75,40 @@ verifying 2 benchmark(s)...
 all 2 benchmark(s) passed
 ```
 
+`run` is the main event: it walks the parameter ladder, times each
+rung, and prints a verdict. A wide-ladder run on `goodFib`:
+
+```benchTranscript (caption := "lake exe fib_benchmark_example run goodFib")
+$ lake exe fib_benchmark_example run goodFib --param-ceiling 4096 --max-seconds-per-call 1
+LeanBench.Examples.Fib.goodFib    expected complexity: n    [warm cache]
+  env: lean=4.30.0-rc2, os=linux, arch=x86_64, commit=<HASH>, <DATE>, host=<HOST>
+  param  per-call    repeats  C
+      0   46.000 ns  ×2^23    C= —
+      1  107.000 ns  ×2^23    C= —
+      2   82.000 ns  ×2^22    C=41.343 †
+      4  112.000 ns  ×2^21    C= —     [<floor]
+      8  200.000 ns  ×2^22    C=25.061 †
+     16  278.000 ns  ×2^21    C=17.416
+     32  459.000 ns  ×2^20    C=14.353
+     64    1.236 µs  ×2^19    C=19.324
+    128    2.334 µs  ×2^18    C=18.241
+    256    3.743 µs  ×2^17    C=14.623
+    512    7.506 µs  ×2^16    C=14.662
+  1_024   17.287 µs  ×2^15    C=16.882
+  2_048   18.792 µs  ×2^13    C= —     [<floor]
+  4_096   43.304 µs  ×2^13    C=10.572
+  verdict: consistent with declared complexity (cMin=10.572, cMax=19.324, β=-0.065)
+  per-spawn floor (harness self-measurement): 33.998 ms
+```
+
+The shape — a `param` ladder, a per-rung `C` ratio, a verdict line
+with `cMin`/`cMax`/`β`, and assorted decorations on individual
+rows — is the
+[Reading the output](https://kim-em.github.io/lean-bench/Quickstart/Reading-the-output/)
+section's whole topic. Skip ahead if you want the table dissected
+now; otherwise the next sections cover declaration-time options
+and we'll meet the full output again later.
+
 # Optional per-param setup
 
 If your benchmarked function operates on a structure that's expensive
