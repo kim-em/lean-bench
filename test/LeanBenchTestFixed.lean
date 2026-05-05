@@ -28,9 +28,9 @@ parent / child path:
 
 namespace LeanBench.Test.Fixed
 
-/-- A trivial pure fixed benchmark. Uses a small computation so
-    test runtime is short. -/
-def cheapPure : UInt64 := Id.run do
+/-- A trivial fixed benchmark. The `Unit →` wrapper is required
+    by `setup_fixed_benchmark` (issue #54). -/
+def cheapPure : Unit → UInt64 := fun () => Id.run do
   let mut a : UInt64 := 0
   let mut b : UInt64 := 1
   for _ in [0:50] do
@@ -40,21 +40,24 @@ def cheapPure : UInt64 := Id.run do
   return a
 
 /-- Same workload, but exposed as an `IO` action. -/
-def cheapIO : IO UInt64 := return cheapPure
+def cheapIO : IO UInt64 := return cheapPure ()
 
 /-- Same workload, but exposed as an `EIO IO.Error` action — the
     fully-spelled-out form that `IO α` reduces to. The macro must
     detect this as IO via semantic isDefEq, not raw head-syntax. -/
-def cheapEIO : EIO IO.Error UInt64 := return cheapPure
+def cheapEIO : EIO IO.Error UInt64 := return cheapPure ()
 
 /-- Same workload, but exposed via a reducible alias of `IO`. The
     macro must reduce the alias before checking the IO shape. -/
 @[reducible] def MyIO (α : Type) : Type := IO α
-def cheapMyIO : MyIO UInt64 := return cheapPure
+def cheapMyIO : MyIO UInt64 := return cheapPure ()
+
+/-- `Unit → IO α` shape — the third accepted callable form. -/
+def cheapIOUnit : Unit → IO UInt64 := fun () => return cheapPure ()
 
 /-- Deliberately-slow workload for the kill-on-cap test. Loops long
     enough to exceed the 0-cap reliably. -/
-def slowPure : UInt64 := Id.run do
+def slowPure : Unit → UInt64 := fun () => Id.run do
   let mut x : UInt64 := 0
   for _ in [0:1_000_000] do
     for _ in [0:1000] do
@@ -63,34 +66,36 @@ def slowPure : UInt64 := Id.run do
 
 /-- Synonym for the correct-`expectedHash` test (issue #55); a second
     registration of `cheapPure` needs a distinct name. -/
-def cheapPureCorrect : UInt64 := cheapPure
+def cheapPureCorrect : Unit → UInt64 := cheapPure
 
 /-- Synonym for the wrong-`expectedHash` test (issue #55). -/
-def cheapPureRegressed : UInt64 := cheapPure
+def cheapPureRegressed : Unit → UInt64 := cheapPure
 
-setup_fixed_benchmark cheapPure where { repeats := 3 }
-setup_fixed_benchmark cheapIO   where { repeats := 3 }
-setup_fixed_benchmark cheapEIO  where { repeats := 2 }
-setup_fixed_benchmark cheapMyIO where { repeats := 2 }
-setup_fixed_benchmark slowPure  where { repeats := 1, maxSecondsPerCall := 5.0 }
+setup_fixed_benchmark cheapPure   where { repeats := 3 }
+setup_fixed_benchmark cheapIO     where { repeats := 3 }
+setup_fixed_benchmark cheapEIO    where { repeats := 2 }
+setup_fixed_benchmark cheapMyIO   where { repeats := 2 }
+setup_fixed_benchmark cheapIOUnit where { repeats := 2 }
+setup_fixed_benchmark slowPure    where { repeats := 1, maxSecondsPerCall := 5.0 }
 setup_fixed_benchmark cheapPureCorrect where {
   repeats := 2
-  expectedHash := some (Hashable.hash cheapPure) }
+  expectedHash := some (Hashable.hash (cheapPure ())) }
 setup_fixed_benchmark cheapPureRegressed where {
   repeats := 2
   -- Deliberately wrong: bit-flipped expected hash. The runner produces
-  -- `Hashable.hash cheapPure`, so the check must fail.
-  expectedHash := some ((Hashable.hash cheapPure) ^^^ 0xffffffffffffffff) }
+  -- `Hashable.hash (cheapPure ())`, so the check must fail.
+  expectedHash := some ((Hashable.hash (cheapPure ())) ^^^ 0xffffffffffffffff) }
 
 end LeanBench.Test.Fixed
 
 open LeanBench
 
-private def cheapPureName : Lean.Name := `LeanBench.Test.Fixed.cheapPure
-private def cheapIOName   : Lean.Name := `LeanBench.Test.Fixed.cheapIO
-private def cheapEIOName  : Lean.Name := `LeanBench.Test.Fixed.cheapEIO
-private def cheapMyIOName : Lean.Name := `LeanBench.Test.Fixed.cheapMyIO
-private def slowPureName  : Lean.Name := `LeanBench.Test.Fixed.slowPure
+private def cheapPureName          : Lean.Name := `LeanBench.Test.Fixed.cheapPure
+private def cheapIOName            : Lean.Name := `LeanBench.Test.Fixed.cheapIO
+private def cheapEIOName           : Lean.Name := `LeanBench.Test.Fixed.cheapEIO
+private def cheapMyIOName          : Lean.Name := `LeanBench.Test.Fixed.cheapMyIO
+private def cheapIOUnitName        : Lean.Name := `LeanBench.Test.Fixed.cheapIOUnit
+private def slowPureName           : Lean.Name := `LeanBench.Test.Fixed.slowPure
 private def cheapPureCorrectName   : Lean.Name :=
   `LeanBench.Test.Fixed.cheapPureCorrect
 private def cheapPureRegressedName : Lean.Name :=
@@ -161,7 +166,7 @@ def testIOPath : IO UInt32 := do
     with `Hashable` results — both impossible if the macro mis-routed
     these as pure values. -/
 def testIOAliasDetection : IO UInt32 := do
-  for name in [cheapEIOName, cheapMyIOName] do
+  for name in [cheapEIOName, cheapMyIOName, cheapIOUnitName] do
     let result ← runFixedBenchmark name
     unless result.points.all (·.status == .ok) do
       IO.eprintln s!"{name}: expected all ok, got {repr result.points}"
@@ -253,7 +258,7 @@ def testObservedHashSurfaced : IO UInt32 := do
   -- But the observed hash must be populated and match the canonical
   -- `Hashable.hash cheapPure` value (the runner is `let r := fnId; let
   -- h := Hashable.hash r`).
-  unless result.observedHash? == some (Hashable.hash LeanBench.Test.Fixed.cheapPure) do
+  unless result.observedHash? == some (Hashable.hash (LeanBench.Test.Fixed.cheapPure ())) do
     IO.eprintln s!"observedHash? mismatch: got {result.observedHash?}"
     return 1
   -- The expected-hash check should be `.unset` when nothing was
@@ -288,8 +293,8 @@ def testExpectedHashMatch : IO UInt32 := do
     formatter renders a FAIL line. Issue #55. -/
 def testExpectedHashMismatch : IO UInt32 := do
   let result ← runFixedBenchmark cheapPureRegressedName
-  let expected := (Hashable.hash LeanBench.Test.Fixed.cheapPure) ^^^ 0xffffffffffffffff
-  let got := Hashable.hash LeanBench.Test.Fixed.cheapPure
+  let expected := (Hashable.hash (LeanBench.Test.Fixed.cheapPure ())) ^^^ 0xffffffffffffffff
+  let got := Hashable.hash (LeanBench.Test.Fixed.cheapPure ())
   unless result.expectedHashCheck == .mismatch expected got do
     IO.eprintln s!"expected .mismatch {expected} {got}, got {repr result.expectedHashCheck}"
     return 1

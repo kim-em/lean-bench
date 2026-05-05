@@ -10,21 +10,19 @@ no parameter sweep, no complexity model, and no verdict — the goal
 is to record an absolute number to compare against external
 references or to catch absolute-performance regressions.
 
-- `tightFib60`  — `goodFib 60` as a pure value (returns `UInt64`).
-   Demonstrates the bare `setup_fixed_benchmark` form on a pure
-   computation.
-- `tightFibIO60` — same workload wrapped in `IO`. Demonstrates the
-   `setup_fixed_benchmark` form on an `IO α` value, useful when the
-   benchmarked workload reads input from disk or shells out to an
-   external tool.
+- `tightFib1M`   — `Unit → IO UInt64`, the recommended shape.
+- `tightFibIO1M` — `IO UInt64`, the legacy shape.
+
+Both read the iteration count from an `IO.Ref` so the back-end
+can't constant-fold the work away (issue #54).
 
 Run them with:
 
 ```
 lake exe fixed_benchmark_example list
-lake exe fixed_benchmark_example run LeanBench.Examples.Fixed.tightFib60
+lake exe fixed_benchmark_example run LeanBench.Examples.Fixed.tightFib1M
 lake exe fixed_benchmark_example compare \
-  LeanBench.Examples.Fixed.tightFib60 LeanBench.Examples.Fixed.tightFibIO60
+  LeanBench.Examples.Fixed.tightFib1M LeanBench.Examples.Fixed.tightFibIO1M
 ```
 -/
 
@@ -42,22 +40,26 @@ def goodFib (n : Nat) : UInt64 := Id.run do
     b := c
   return a
 
-/-- A pure fixed benchmark: compute `goodFib 60` once, return the
-    `UInt64` result. The benchmark name is the function name. -/
-def tightFib60 : UInt64 := goodFib 60
+/-- Iteration count read at runtime so the back-end can't fold
+    `goodFib n` to a constant (issue #54). -/
+initialize fibCountRef : IO.Ref Nat ← IO.mkRef 1_000_000
 
-/-- An `IO` fixed benchmark: same workload but inside `IO`. The
-    `setup_fixed_benchmark` macro detects the `IO α` head shape and
-    emits a runner that uses `←` to extract the value. -/
-def tightFibIO60 : IO UInt64 := return goodFib 60
+/-- Recommended shape: `Unit → IO α`. The `Unit` parameter forces
+    re-invocation each repeat; the `IO.Ref` read defeats folding. -/
+def tightFib1M : Unit → IO UInt64 := fun () => do
+  return goodFib (← fibCountRef.get)
 
-setup_fixed_benchmark tightFib60 where {
+/-- Legacy shape: bare `IO α`. Same workload as `tightFib1M`. -/
+def tightFibIO1M : IO UInt64 := do
+  return goodFib (← fibCountRef.get)
+
+setup_fixed_benchmark tightFib1M where {
   -- Pin the result hash so the run fails on a silent regression
   -- (issue #55). On the first run, copy the printed `observed hash:`
   -- value into the `where` clause.
-  expectedHash := some (Hashable.hash (goodFib 60))
+  expectedHash := some (Hashable.hash (goodFib 1_000_000))
 }
-setup_fixed_benchmark tightFibIO60 where {
+setup_fixed_benchmark tightFibIO1M where {
   -- Override declared defaults; the `repeats` knob has no parametric
   -- analogue, hence the dedicated fixed-only field on
   -- `FixedBenchmarkConfig`.

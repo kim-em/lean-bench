@@ -105,9 +105,13 @@ takes ~1.2 s; the FLINT equivalent takes ~0.8 s" — there's a second
 registration form with no parameter sweep:
 
 ```lean
-def factorXOverFTwo : Polynomial Bool := …
+def factorXOverFTwo : Unit → Polynomial Bool := fun () => …
 setup_fixed_benchmark factorXOverFTwo
 ```
+
+(Bare `def : α` registrations are rejected — closed pure
+expressions get folded into compile-time constants. See issue #54
+and the [quickstart](doc/quickstart.md#fixed-problem-benchmarks).)
 
 The runner does one warmup call followed by `repeats` measured calls
 (default 5), reports median / min / max wall time, and hash-checks

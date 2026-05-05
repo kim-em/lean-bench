@@ -73,4 +73,36 @@ Hint: Type class instance resolution failures can be inspected with the `set_opt
 #guard_msgs in
 setup_benchmark whereBad n => n where 42
 
+-- Test 7: `setup_fixed_benchmark` rejects a bare pure value (issue #54).
+-- The Lean compiler folds closed pure expressions into a compile-time
+-- constant, so registering `def x : UInt64 := <expr>` would silently
+-- measure a constant load rather than the intended work.
+def fixedBarePure : UInt64 := 42
+
+/--
+error: setup_fixed_benchmark: name `LeanBench.Test.SetupErrors.fixedBarePure` has type `UInt64`, which is not a callable.
+
+Bare-value registrations are rejected (issue #54): closed pure expressions get folded into a compile-time constant, so the harness would measure a ~100ns constant load rather than the intended work. Use one of:
+  • `Unit → α`     (recommended)
+  • `Unit → IO α`
+  • `IO α`         (caveat: `pure <closedExpr>` is also folded)
+-/
+#guard_msgs in
+setup_fixed_benchmark fixedBarePure
+
+-- Test 8: `setup_fixed_benchmark` rejects a function that doesn't take Unit.
+def fixedNatToNat (n : Nat) : Nat := n + 1
+
+/--
+error: setup_fixed_benchmark: name `LeanBench.Test.SetupErrors.fixedNatToNat` has unsupported function type `Nat →
+  Nat`; the target must be `Unit → α`, `Unit → IO α`, or `IO α`
+-/
+#guard_msgs in
+setup_fixed_benchmark fixedNatToNat
+
+-- Test 9: `setup_fixed_benchmark` accepts the recommended `Unit → α` shape.
+-- (No expected error.)
+def fixedUnitOk : Unit → UInt64 := fun () => 7
+setup_fixed_benchmark fixedUnitOk
+
 end LeanBench.Test.SetupErrors

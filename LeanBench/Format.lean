@@ -619,6 +619,19 @@ def fmtFixedResult (r : FixedResult) (includeEnv : Bool := true) : String := Id.
     lines := lines.push s!"  expected hash: FAIL — expected {fmtHashHex expected}, but repeats disagreed (see hash line above); pin a deterministic benchmark first"
   for line in fmtFixedMemorySummary r.points do
     lines := lines.push line
+  -- Defense-in-depth (issue #54): sub-microsecond medians on a
+  -- fixed benchmark almost always mean the body was folded into a
+  -- compile-time constant — surface a clear advisory rather than
+  -- silently reporting the noise floor.
+  match r.medianNanos? with
+  | some med =>
+    if med < 1000 then
+      lines := lines.push <|
+        "  ‼ median wall time below 1µs — possibly a compile-time-folded constant \
+         rather than work. If the workload is genuinely tiny this is fine; otherwise \
+         thread inputs through runtime state (e.g. `IO.Ref`, disk) so the body isn't \
+         closed at compile time. See issue #54."
+  | none => pure ()
   return "\n".intercalate lines.toList
 
 /-- `0xDEADBEEF` rendering for an `Option UInt64`; `—` when absent

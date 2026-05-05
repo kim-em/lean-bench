@@ -283,6 +283,36 @@ def testFmtFixedResult : IO UInt32 := do
     "  hash: all repeats agree"
   snapshot "fmtFixedResult" expected (Format.fmtFixedResult sampleFixedResult)
 
+/-- A sub-µs median should produce a `‼` advisory line warning that
+    the measurement may be a compile-time-folded constant (issue #54). -/
+def testFmtFixedResultSubMicroAdvisory : IO UInt32 := do
+  let fastPoints : Array FixedDataPoint := #[
+    { repeatIndex := 0, totalNanos := 100, resultHash := some 0xfeed, status := .ok },
+    { repeatIndex := 1, totalNanos := 200, resultHash := some 0xfeed, status := .ok },
+    { repeatIndex := 2, totalNanos := 150, resultHash := some 0xfeed, status := .ok }]
+  let fastResult : FixedResult :=
+    { sampleFixedResult with
+      points := fastPoints
+      medianNanos? := some 150
+      minNanos? := some 100
+      maxNanos? := some 200 }
+  let rendered := Format.fmtFixedResult fastResult
+  unless (rendered.splitOn "below 1µs").length > 1 do
+    IO.eprintln s!"fmtFixedResult.subMicroAdvisory: missing advisory line\n{rendered}"
+    return 1
+  IO.println "  ok  fmtFixedResult.subMicroAdvisory"
+  return 0
+
+/-- A normal-µs median should NOT produce the advisory line. The
+    `sampleFixedResult` fixture's median is 1.050 ms. -/
+def testFmtFixedResultNoAdvisoryAboveThreshold : IO UInt32 := do
+  let rendered := Format.fmtFixedResult sampleFixedResult
+  if (rendered.splitOn "below 1µs").length > 1 then
+    IO.eprintln s!"fmtFixedResult.noAdvisory: unexpected advisory at 1.050 ms median\n{rendered}"
+    return 1
+  IO.println "  ok  fmtFixedResult.noAdvisoryAboveThreshold"
+  return 0
+
 def testFmtFixedComparison : IO UInt32 := do
   let expected :=
     "Sample.cheap    [fixed] repeats=3\n" ++
@@ -440,6 +470,8 @@ def main : IO UInt32 := do
       ("fmtComparison.multi", testFmtComparisonMulti),
       ("fmtComparison.hashUnavailable", testFmtComparisonHashUnavailable),
       ("fmtFixedResult", testFmtFixedResult),
+      ("fmtFixedResult.subMicroAdvisory", testFmtFixedResultSubMicroAdvisory),
+      ("fmtFixedResult.noAdvisoryAboveThreshold", testFmtFixedResultNoAdvisoryAboveThreshold),
       ("fmtFixedComparison", testFmtFixedComparison),
       ("fmtVerifyReport.pass", testFmtVerifyPass),
       ("fmtVerifyReport.fail", testFmtVerifyFail),
