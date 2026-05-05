@@ -117,7 +117,16 @@ def classifyFixedCheck (spec : FixedSpec) (dp : FixedDataPoint) : Option String 
     if spec.hashable && dp.resultHash.isNone then
       some "hashable fixed benchmark but child returned no result_hash"
     else
-      none
+      -- Smoke check only: a single spawn with no warmup, so a pass
+      -- here doesn't guarantee `run` will pass (warmup-sensitive or
+      -- multi-repeat-disagreement cases can still surface there).
+      -- Issue #55.
+      if !spec.hashable then none
+      else match spec.config.expectedHash, dp.resultHash with
+        | some expected, some got =>
+          if got == expected then none
+          else some s!"expectedHash mismatch — declared 0x{String.ofList (Nat.toDigits 16 expected.toNat)}, got 0x{String.ofList (Nat.toDigits 16 got.toNat)}"
+        | _, _ => none
   | .timedOut    => some "timed out on warmup invocation"
   | .killedAtCap => some "killed at maxSecondsPerCall cap on warmup invocation"
   | .error msg   => some s!"child error: {msg}"

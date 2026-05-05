@@ -176,8 +176,32 @@ def fixedBenchmarkConfigToJson (c : FixedBenchmarkConfig) : Json :=
   Json.mkObj [
     ("repeats",              jNat c.repeats),
     ("max_seconds_per_call", jFloat c.maxSecondsPerCall),
-    ("warmup",               jBool c.warmup)
+    ("warmup",               jBool c.warmup),
+    ("expected_hash",        jOptHash c.expectedHash)
   ]
+
+/-- `status` ∈ `{"unset", "match", "mismatch", "no_observed_hash",
+"inconsistent_across_repeats"}`; `expected` and `got` are present
+only when the corresponding payload exists. Issue #55. -/
+def expectedHashCheckToJson : ExpectedHashCheck → Json
+  | .unset => Json.mkObj [("status", jStr "unset")]
+  | .match => Json.mkObj [("status", jStr "match")]
+  | .mismatch expected got =>
+    Json.mkObj [
+      ("status",   jStr "mismatch"),
+      ("expected", jOptHash (some expected)),
+      ("got",      jOptHash (some got))
+    ]
+  | .noObservedHash expected =>
+    Json.mkObj [
+      ("status",   jStr "no_observed_hash"),
+      ("expected", jOptHash (some expected))
+    ]
+  | .inconsistentAcrossRepeats expected =>
+    Json.mkObj [
+      ("status",   jStr "inconsistent_across_repeats"),
+      ("expected", jOptHash (some expected))
+    ]
 
 def trialSummaryToJson (ts : TrialSummary) : Json :=
   Json.mkObj [
@@ -226,6 +250,8 @@ def fixedResultToJson (r : FixedResult) : Json :=
     ("min_nanos",        jOptNat r.minNanos?),
     ("max_nanos",        jOptNat r.maxNanos?),
     ("hashes_agree",     jBool r.hashesAgree),
+    ("observed_hash",    jOptHash r.observedHash?),
+    ("expected_hash_check", expectedHashCheckToJson r.expectedHashCheck),
     ("budget_truncated", jBool r.budgetTruncated),
     ("env",              match r.env? with
                          | some env => RunEnv.toJson env
@@ -407,7 +433,8 @@ def fixedBenchmarkConfigFromJson (j : Json) : Except String FixedBenchmarkConfig
   return {
     repeats           := ← requireNatField j "repeats"
     maxSecondsPerCall := ← requireFloatField j "max_seconds_per_call"
-    warmup            := ← requireBoolField j "warmup" }
+    warmup            := ← requireBoolField j "warmup"
+    expectedHash      := ← optionalHashFromJson j "expected_hash" }
 
 def trialSummaryFromJson (j : Json) : Except String TrialSummary := do
   return {
@@ -479,6 +506,9 @@ def fixedResultFromJson (j : Json) : Except String FixedResult := do
     minNanos?    := getOptNat j "min_nanos"
     maxNanos?    := getOptNat j "max_nanos"
     hashesAgree  := getBool j "hashes_agree" true
+    -- `expected_hash_check` is a derived projection — recomputed by
+    -- `FixedResult.expectedHashCheck`, not round-tripped here.
+    observedHash? := ← optionalHashFromJson j "observed_hash"
     budgetTruncated := ← requireBoolField j "budget_truncated"
     env?         := ← envFromJson? j "env"
   }

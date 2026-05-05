@@ -311,6 +311,20 @@ format do not force a bump of `export_schema_version`, and vice versa.
   summaries, etc. Every result also carries `"budget_truncated"`
   (boolean): `true` when the run was a CI-budget run and that
   benchmark's ladder was cut short between rungs by the deadline.
+
+  Fixed-result entries (`"kind":"fixed"`) additionally carry:
+
+  - `"observed_hash"` (hex string \| null): hash of the first `ok`
+    repeat's result; `null` when none.
+  - `"config.expected_hash"` (hex string \| null): mirrors
+    `FixedBenchmarkConfig.expectedHash`.
+  - `"expected_hash_check"` (object): `{"status": "unset" | "match" |
+    "mismatch" | "no_observed_hash" | "inconsistent_across_repeats"}`,
+    with `"expected"` / `"got"` hex fields when the check compared
+    values. The non-`"unset"`/`"match"` statuses are hard failures and
+    bump the CLI exit code. `"inconsistent_across_repeats"` fires when
+    `hashesAgree` is false and `expectedHash` is declared — a single
+    first-ok comparison would be unsafe. Issue #55.
 - **`baseline_comparison`** (array, optional): present when `--baseline`
   was used. One entry per matched function with per-param regression /
   improvement / stable classification.
