@@ -241,10 +241,11 @@ isolation machinery applies unchanged. -/
 
 /-- Render one fixed-benchmark JSONL row. The schema overlaps the
     parametric row but adds `kind:"fixed"` and a `repeat_index`
-    field; `param` / `inner_repeats` are absent because they're
-    meaningless for a fixed benchmark. -/
+    field; `param` is absent (no parameter sweep). `inner_repeats`
+    is the auto-tuned count chosen inside this child (issue #58),
+    `0` on synthesized error rows. -/
 def emitFixedRow
-    (function : Lean.Name) (repeatIndex totalNanos : Nat)
+    (function : Lean.Name) (repeatIndex innerRepeats totalNanos : Nat)
     (resultHash : Option UInt64) (status : Status) (env : Env)
     (mem : MemStats := {})
     (errorMsg? : Option String := none) :
@@ -255,6 +256,7 @@ def emitFixedRow
       s!"\"kind\":{jsonStr Schema.kindFixed}",
       s!"\"function\":{jsonStr function.toString}",
       s!"\"repeat_index\":{repeatIndex}",
+      s!"\"inner_repeats\":{innerRepeats}",
       s!"\"total_nanos\":{totalNanos}",
       s!"\"result_hash\":{jsonOptHash resultHash}",
       s!"\"status\":{jsonStr status.toJsonString}",
@@ -265,30 +267,65 @@ def emitFixedRow
     ] ++ "}"
   IO.println row
 
+/-- Auto-tuner for fixed benchmarks (issue #58). Mirrors the parametric
+    `autoTune` in spirit but with a simpler control flow: there's no
+    "halve target" trick — we just want total wall time at or above
+    `minTotalNanos` so the measurement clears the clock-noise floor.
+
+    Strategy: probe with `count := 1`, then double until the batch's
+    wall time crosses the floor. Each probe re-runs the body from
+    scratch, so the per-iteration time stays a clean `total / count`
+    on the final batch. The `expectedHash` semantics from issue #55
+    apply to the *first iteration*'s hash, which the runner returns
+    on every batch — and which is by construction the same value
+    across batches for any deterministic benchmark.
+
+    `minTotalNanos == 0` short-circuits to a single invocation, which
+    matches pre-#58 behaviour for callers that want to opt out. The
+    parent's `maxSecondsPerCall` cap is the hard ceiling: when the
+    body is genuinely fast and the floor isn't reachable inside the
+    cap, the parent kills the child and reports `killedAtCap`. -/
+partial def autoTuneFixed
+    (loop : Nat → IO (Nat × Option UInt64))
+    (minTotalNanos : Nat) :
+    IO (Nat × Nat × Option UInt64) := do
+  let mut count : Nat := 1
+  let (t₀, h₀) ← loop count
+  if minTotalNanos == 0 || t₀ ≥ minTotalNanos then
+    return (count, t₀, h₀)
+  let mut total : Nat := t₀
+  let mut hash : Option UInt64 := h₀
+  while total < minTotalNanos do
+    count := count * 2
+    let (t', h') ← loop count
+    total := t'
+    hash := h'
+  return (count, total, hash)
+
 /-- Top-level entry point for fixed-benchmark child runs. Looks the
-    name up in the fixed runtime registry, performs one timed
-    invocation, emits one JSONL row, exits 0 on success or 1 on
-    error. -/
+    name up in the fixed runtime registry, runs the auto-tuner with
+    the parent-supplied `minTotalNanos` floor, emits one JSONL row,
+    exits 0 on success or 1 on error. Issue #58. -/
 def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat)
-    (env? : Option Env := none) : IO UInt32 := do
+    (minTotalNanos : Nat) (env? : Option Env := none) : IO UInt32 := do
   let env ← match env? with
     | some env => pure env
     | none     => RunEnv.capture
   match ← findFixedRuntimeEntry benchName with
   | none =>
-    emitFixedRow benchName repeatIndex 0 none
+    emitFixedRow benchName repeatIndex 0 0 none
       (.error s!"unregistered fixed benchmark: {benchName}") env
       (errorMsg? := some s!"unregistered fixed benchmark: {benchName}")
     return 1
   | some entry =>
     try
-      let (total, hash) ← entry.runner
+      let (count, total, hash) ← autoTuneFixed entry.runner minTotalNanos
       let mem ← MemStats.capture
-      emitFixedRow benchName repeatIndex total hash .ok env (mem := mem)
+      emitFixedRow benchName repeatIndex count total hash .ok env (mem := mem)
       return (0 : UInt32)
     catch e =>
       let msg := s!"runner threw: {e.toString}"
-      emitFixedRow benchName repeatIndex 0 none (.error msg) env
+      emitFixedRow benchName repeatIndex 0 0 none (.error msg) env
         (errorMsg? := some msg)
       return (1 : UInt32)
 

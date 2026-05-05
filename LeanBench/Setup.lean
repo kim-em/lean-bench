@@ -385,59 +385,88 @@ where
     let rIdent := mkIdent rName
     let cfgIdent := mkIdent cfgDeclName
     -- Six shapes from `(shape, isHashable)`. All bracket the timer
-    -- around one invocation and force the result via `blackBox` to
-    -- defeat DCE, like the parametric path.
+    -- around one batch of `count` invocations and force each result
+    -- via `blackBox` to defeat DCE, like the parametric path. The
+    -- *first* iteration's hash is captured and returned, matching
+    -- the issue #55 "first-iteration's result hash" semantics under
+    -- the issue #58 auto-tuner: subsequent iterations within a
+    -- batch aren't separately hashed — the cross-repeat (cross-
+    -- spawn) agreement check handles non-determinism detection.
     let mkRunner : CommandElabM (TSyntax `command) :=
       match shape, isHashable with
       | .pureUnit, true =>
         `(command|
-          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+          @[inline] def $rIdent (count : Nat) :
+              IO (Nat × Option UInt64) := do
+            if count == 0 then return (0, none)
             let t₀ ← IO.monoNanosNow
-            let r := $fnId ()
-            let h := Hashable.hash r
-            LeanBench.blackBox h
+            let r₀ := $fnId ()
+            let h₀ := Hashable.hash r₀
+            LeanBench.blackBox h₀
+            for _ in [1:count] do
+              let r := $fnId ()
+              LeanBench.blackBox (Hashable.hash r)
             let t₁ ← IO.monoNanosNow
-            return (t₁ - t₀, some h))
+            return (t₁ - t₀, some h₀))
       | .pureUnit, false =>
         `(command|
-          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+          @[inline] def $rIdent (count : Nat) :
+              IO (Nat × Option UInt64) := do
+            if count == 0 then return (0, none)
             let t₀ ← IO.monoNanosNow
-            let r := $fnId ()
-            LeanBench.blackBox (Hashable.hash (sizeOf r))
+            for _ in [0:count] do
+              let r := $fnId ()
+              LeanBench.blackBox (Hashable.hash (sizeOf r))
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, none))
       | .ioUnit, true =>
         `(command|
-          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+          @[inline] def $rIdent (count : Nat) :
+              IO (Nat × Option UInt64) := do
+            if count == 0 then return (0, none)
             let t₀ ← IO.monoNanosNow
-            let r ← (($fnId : Unit → IO _) ())
-            let h := Hashable.hash r
-            LeanBench.blackBox h
+            let r₀ ← (($fnId : Unit → IO _) ())
+            let h₀ := Hashable.hash r₀
+            LeanBench.blackBox h₀
+            for _ in [1:count] do
+              let r ← (($fnId : Unit → IO _) ())
+              LeanBench.blackBox (Hashable.hash r)
             let t₁ ← IO.monoNanosNow
-            return (t₁ - t₀, some h))
+            return (t₁ - t₀, some h₀))
       | .ioUnit, false =>
         `(command|
-          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+          @[inline] def $rIdent (count : Nat) :
+              IO (Nat × Option UInt64) := do
+            if count == 0 then return (0, none)
             let t₀ ← IO.monoNanosNow
-            let r ← (($fnId : Unit → IO _) ())
-            LeanBench.blackBox (Hashable.hash (sizeOf r))
+            for _ in [0:count] do
+              let r ← (($fnId : Unit → IO _) ())
+              LeanBench.blackBox (Hashable.hash (sizeOf r))
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, none))
       | .io, true =>
         `(command|
-          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+          @[inline] def $rIdent (count : Nat) :
+              IO (Nat × Option UInt64) := do
+            if count == 0 then return (0, none)
             let t₀ ← IO.monoNanosNow
-            let r ← ($fnId : IO _)
-            let h := Hashable.hash r
-            LeanBench.blackBox h
+            let r₀ ← ($fnId : IO _)
+            let h₀ := Hashable.hash r₀
+            LeanBench.blackBox h₀
+            for _ in [1:count] do
+              let r ← ($fnId : IO _)
+              LeanBench.blackBox (Hashable.hash r)
             let t₁ ← IO.monoNanosNow
-            return (t₁ - t₀, some h))
+            return (t₁ - t₀, some h₀))
       | .io, false =>
         `(command|
-          @[inline] def $rIdent : IO (Nat × Option UInt64) := do
+          @[inline] def $rIdent (count : Nat) :
+              IO (Nat × Option UInt64) := do
+            if count == 0 then return (0, none)
             let t₀ ← IO.monoNanosNow
-            let r ← ($fnId : IO _)
-            LeanBench.blackBox (Hashable.hash (sizeOf r))
+            for _ in [0:count] do
+              let r ← ($fnId : IO _)
+              LeanBench.blackBox (Hashable.hash (sizeOf r))
             let t₁ ← IO.monoNanosNow
             return (t₁ - t₀, none))
     elabCommand (← mkRunner)

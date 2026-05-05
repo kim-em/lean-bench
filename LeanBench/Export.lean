@@ -148,13 +148,14 @@ def fixedDataPointToJson (dp : FixedDataPoint) : Json :=
     | .error msg => jStr msg
     | _ => Json.null
   Json.mkObj [
-    ("repeat_index", jNat dp.repeatIndex),
-    ("total_nanos",  jNat dp.totalNanos),
-    ("status",       jStr (statusToString dp.status)),
-    ("result_hash",  jOptHash dp.resultHash),
-    ("error",        errorJson),
-    ("alloc_bytes",  jOptNat dp.allocBytes),
-    ("peak_rss_kb",  jOptNat dp.peakRssKb)
+    ("repeat_index",  jNat dp.repeatIndex),
+    ("inner_repeats", jNat dp.innerRepeats),
+    ("total_nanos",   jNat dp.totalNanos),
+    ("status",        jStr (statusToString dp.status)),
+    ("result_hash",   jOptHash dp.resultHash),
+    ("error",         errorJson),
+    ("alloc_bytes",   jOptNat dp.allocBytes),
+    ("peak_rss_kb",   jOptNat dp.peakRssKb)
   ]
 
 def benchmarkConfigToJson (c : BenchmarkConfig) : Json :=
@@ -177,6 +178,7 @@ def fixedBenchmarkConfigToJson (c : FixedBenchmarkConfig) : Json :=
     ("repeats",              jNat c.repeats),
     ("max_seconds_per_call", jFloat c.maxSecondsPerCall),
     ("warmup",               jBool c.warmup),
+    ("min_total_seconds",    jFloat c.minTotalSeconds),
     ("expected_hash",        jOptHash c.expectedHash)
   ]
 
@@ -385,12 +387,17 @@ def dataPointFromJson (j : Json) : Except String DataPoint := do
 
 def fixedDataPointFromJson (j : Json) : Except String FixedDataPoint := do
   let repeatIndex ← requireNatField j "repeat_index"
+  -- `inner_repeats` arrived in issue #58. Older exports omit it;
+  -- treat them as `1` (the pre-#58 effective count, since each spawn
+  -- ran exactly one invocation).
+  let innerRepeats : Nat := getNat j "inner_repeats" 1
   let totalNanos ← requireNatField j "total_nanos"
   let statusStr ← requireStringField j "status"
   let errorMsg? := getOptStr j "error"
   let resultHash ← optionalHashFromJson j "result_hash"
   return {
     repeatIndex
+    innerRepeats
     totalNanos
     status      := parseStatus statusStr errorMsg?
     resultHash
@@ -434,6 +441,10 @@ def fixedBenchmarkConfigFromJson (j : Json) : Except String FixedBenchmarkConfig
     repeats           := ← requireNatField j "repeats"
     maxSecondsPerCall := ← requireFloatField j "max_seconds_per_call"
     warmup            := ← requireBoolField j "warmup"
+    -- `min_total_seconds` arrived in issue #58. Default to today's
+    -- `FixedBenchmarkConfig.minTotalSeconds` default when absent so
+    -- pre-#58 baseline files round-trip cleanly.
+    minTotalSeconds   := getFloat j "min_total_seconds" 0.001
     expectedHash      := ← optionalHashFromJson j "expected_hash" }
 
 def trialSummaryFromJson (j : Json) : Except String TrialSummary := do

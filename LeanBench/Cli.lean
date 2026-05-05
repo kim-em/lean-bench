@@ -85,6 +85,7 @@ Each missing flag leaves the declared value untouched."
     "signal-floor-multiplier" : Float; "Parametric only: per-spawn signal-floor multiplier (default 10.0; ≥ 1.0). Rows whose totalNanos is below `multiplier × spawnFloor` are flagged `[<floor]` and excluded from the verdict. `1.0` disables the filter; useful in CI smoke tests on slow runners. Issue #47."
     "auto-fit";                      "Parametric only: after the verdict, fit a fixed catalog of complexity models (1, n, n*log n, n^2, n^3, 2^n) to the observed per-call timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
+    "min-total-seconds" : Float;     "Fixed only: auto-tune floor on inner repeats per spawn (s; default 0.001 = 1 ms). The child runs the body once, then doubles the inner-repeat count until total wall time clears this floor. Per-iteration time is reported as total/inner_repeats. Issue #58."
     "ignore-expected-hash";          "Fixed only: clear any declared `expectedHash` for this run, so a hash mismatch no longer fails. For local experimentation when the result is intentionally changing. Issue #55."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
     baseline : String;               "Compare against a previous export FILE; report regressions and improvements. Exit code is non-zero when any regression exceeds the threshold."
@@ -105,8 +106,9 @@ def childSub : Cmd := `[Cli|
     "target-nanos" : Nat;  "Parametric: inner-tuning target wall-time (ns)."
     "cache-mode" : LeanBench.CacheMode;
                            "Parametric: warm (default — auto-tune inside this child) or cold (single untuned invocation; parent respawns per rung)."
-    fixed;                 "Fixed: dispatch the fixed-benchmark single-invocation runner instead of the parametric autotuner."
+    fixed;                 "Fixed: dispatch the fixed-benchmark auto-tuned runner instead of the parametric autotuner."
     "repeat-index" : Nat;  "Fixed: 0-based repeat index to record on the emitted JSONL row."
+    "min-total-nanos" : Nat; "Fixed: auto-tune floor on inner repeats inside this spawn (ns). Issue #58."
     "env-json" : String;   "Issue #11: parent's pre-captured env JSON, propagated so all children stamp identical env on their rows. Falls back to fresh capture when absent or malformed."
 ]
 
@@ -145,6 +147,7 @@ explicit names are used."
     "signal-floor-multiplier" : Float; "Parametric only: per-spawn signal-floor multiplier (default 10.0; ≥ 1.0). Rows whose totalNanos is below `multiplier × spawnFloor` are flagged `[<floor]` and excluded from the verdict. `1.0` disables the filter; useful in CI smoke tests on slow runners. Issue #47."
     "auto-fit";                      "Parametric only: after each per-function verdict, fit a fixed catalog of complexity models to the observed timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
+    "min-total-seconds" : Float;     "Fixed only: auto-tune floor on inner repeats per spawn (s; default 0.001 = 1 ms). The child runs the body once, then doubles the inner-repeat count until total wall time clears this floor. Per-iteration time is reported as total/inner_repeats. Issue #58."
     "ignore-expected-hash";          "Fixed only: clear any declared `expectedHash` for this run, so a hash mismatch no longer fails. For local experimentation when the result is intentionally changing. Issue #55."
     "export-file" : String;           "Write results to FILE in machine-readable JSON format (issue #3)."
 

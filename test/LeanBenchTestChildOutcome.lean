@@ -39,8 +39,8 @@ private def okJsonlRow : String :=
 /-- A canonical fixed `ok` JSONL row. -/
 private def okFixedJsonlRow : String :=
   "{\"schema_version\":1,\"kind\":\"fixed\",\"function\":\"foo.bar\"," ++
-  "\"repeat_index\":2,\"total_nanos\":1234567,\"result_hash\":\"0xcafebabe\"," ++
-  "\"status\":\"ok\",\"error\":null}"
+  "\"repeat_index\":2,\"inner_repeats\":1,\"total_nanos\":1234567," ++
+  "\"result_hash\":\"0xcafebabe\",\"status\":\"ok\",\"error\":null}"
 
 private def expect (label : String) (cond : Bool) : IO UInt32 := do
   if cond then return 0
