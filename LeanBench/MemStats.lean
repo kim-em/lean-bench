@@ -54,18 +54,9 @@ structure MemStats where
     into the numeric kibibyte count. Returns `none` for anything
     that doesn't match (the kernel format is stable, but a future
     field reorder shouldn't crash the harness). -/
-private def parseStatusKb (line : String) : Option Nat := Id.run do
-  -- Strip everything up to and including the first colon.
-  match line.splitOn ":" with
-  | _ :: rest =>
-    let payload := ("".intercalate rest).trimAscii.toString
-    -- Drop the trailing `kB` (or anything non-numeric after the
-    -- digits) by splitting on whitespace and taking the first token.
-    let toks := payload.splitOn " "
-    match toks with
-    | t :: _ => return t.toNat?
-    | _      => return none
-  | _ => return none
+private def parseStatusKb (line : String) : Option Nat :=
+  (line.dropWhile (· != ':') |>.drop 1).trimAscii
+    |>.takeWhile Char.isDigit |>.toNat?
 
 /-- Best-effort peak-RSS read on Linux. Reads `/proc/self/status`
     once and pulls the `VmHWM:` field. Collapses every failure mode

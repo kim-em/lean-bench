@@ -93,17 +93,12 @@ private def statusSuffix : Status → String
   | .error msg   => s!" [error: {msg}]"
 
 /-- Decimal with `_` every three digits from the right: `1123456 → "1_123_456"`. -/
-private def fmtNatUnderscores (n : Nat) : String := Id.run do
-  let s := toString n
-  let len := s.length
-  if len ≤ 3 then return s
-  let chars := s.toList
-  let mut out : String := ""
-  for i in [0 : len] do
-    if i > 0 ∧ (len - i) % 3 == 0 then
-      out := out.push '_'
-    out := out.push chars[i]!
-  return out
+private partial def fmtNatUnderscores (n : Nat) : String :=
+  if n < 1000 then toString n
+  else
+    let lo := toString (n % 1000)
+    let loPadded := String.ofList (List.replicate (3 - lo.length) '0') ++ lo
+    fmtNatUnderscores (n / 1000) ++ "_" ++ loPadded
 
 /-- Render the inner-repeat count. The auto-tuner always picks a power
 of 2, so we show it as `×2^k`. Non-powers (shouldn't happen in

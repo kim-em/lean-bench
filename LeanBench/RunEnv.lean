@@ -166,10 +166,7 @@ Strips both POSIX `/` and Windows `\\` separators so a Windows path
 like `C:\\foo\\bar.exe` resolves cleanly. -/
 private def detectExeName : IO String := do
   let path := (← IO.appPath).toString
-  let mut last : String := path
-  for slice in path.split (fun c => c == '/' || c == '\\') do
-    last := slice.toString
-  return last
+  return (path.takeEndWhile (fun c => c != '/' && c != '\\')).toString
 
 /-! ## Wallclock formatting -/
 
