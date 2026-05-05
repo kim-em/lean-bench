@@ -28,7 +28,7 @@ them assume you already have a populated benchmark binary; if not,
 see [Quickstart](https://kim-em.github.io/lean-bench/Quickstart/)
 first.
 
-# How `profile` works
+# How profile works
 
 ```
 $ lake exe bench profile NAME --profiler "PROFILER ARGS --" [--param N]
@@ -63,7 +63,7 @@ inherited. Differences from `run`:
 The harness echoes the assembled command line to stderr before
 exec'ing so you can see exactly what was run.
 
-# Workflow 1 — `perf stat` (counters at a glance)
+# Workflow 1 perf stat
 
 `perf stat` is the right tool when you want to know "is this a
 CPU problem, a memory-bandwidth problem, or a
@@ -97,7 +97,7 @@ The benchmark's own JSONL row stays interleaved on stdout — the
 `inner_repeats` tells you how many calls the autotuner ran inside
 this single profiler invocation.
 
-# Workflow 2 — `perf record` + `perf report` / flamegraph
+# Workflow 2 perf record and flamegraphs
 
 For "where is the hot code?" use `perf record`. It writes a
 `perf.data` file in the current directory which `perf report`
@@ -127,7 +127,7 @@ Notes:
   autotuner runs the function ~thousands of times inside one
   `perf record` invocation, so the profile is dense.
 
-# Workflow 3 — `samply` (perf-equivalent, cross-platform)
+# Workflow 3 samply
 
 [`samply`](https://github.com/mstange/samply) is a perf-style
 sampling profiler that works on Linux and macOS, with a built-in
@@ -146,7 +146,7 @@ a browser for the interactive flamegraph view.
 On macOS, `samply` is the path of least resistance — Apple's
 Instruments works too, but its CLI integration is heavier.
 
-# Workflow 4 — `/usr/bin/time -v` (resource usage / RSS)
+# Workflow 4 time -v and heaptrack
 
 Issue [#13](https://github.com/kim-em/lean-bench/issues/13)
 mentions allocation profilers; the lightest-weight proxy on Linux
@@ -204,7 +204,7 @@ $ lake exe bench profile myFib --param 1024 \
     --cache-mode cold --profiler "perf record -F 999 -g --"
 ```
 
-# What `profile` does not do
+# What profile does not do
 
 - It does not run the verdict / advisory pipeline. If you want a
   verdict-eligible measurement, use `run` and `compare`.

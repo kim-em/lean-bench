@@ -30,7 +30,7 @@ For background on the harness mechanics referenced below, see
 user-facing setup, see
 [Quickstart](https://kim-em.github.io/lean-bench/Quickstart/).
 
-# `Nat` is bignum: arithmetic cost depends on the value
+# Nat is bignum
 
 Lean's `Nat` is arbitrary-precision. Every `+`, `*`, `/` runs in
 roughly `O(k)` (or `O(k log k)` for multiplication) where `k` is
@@ -91,7 +91,7 @@ linearly), or switch to `UInt64` / `USize` / `Float` if the
 algorithm is supposed to be doing fixed-width work and the bignum
 drift is incidental.
 
-# Force the work: don't accidentally time a thunk
+# Force the work
 
 Lean is call-by-value at runtime, but the compiler is aggressive.
 A benchmark that constructs a value and never observes it can be
@@ -271,7 +271,7 @@ non-decidable existentials) won't be measurable. The failure
 surfaces when building or running the compiled benchmark, not
 during `setup_benchmark` elaboration.
 
-# Warm versus cold: read the trimmed tail, not the first row
+# Warm versus cold reading
 
 Every benchmark run has a cold regime where the per-call overhead
 (child startup, JIT-style adaptive code paths in the runtime,
@@ -331,7 +331,7 @@ see
 On those benchmarks the verdict's `β` line shows `—` and you
 should read `cMin/cMax` directly.
 
-# Fixed-problem benchmarks: median, not mean
+# Fixed-problem median
 
 For a `setup_fixed_benchmark` registration there is no parameter
 sweep. The harness runs one warmup call followed by `repeats`

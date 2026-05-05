@@ -93,7 +93,7 @@ verifying 2 benchmark(s)...
 all 2 benchmark(s) passed
 ```
 
-# Optional: per-param setup with `with prep := …`
+# Optional per-param setup
 
 If your benchmarked function operates on a structure that's expensive
 to build (a sorted array, a tree, a hashmap), declaring it as
@@ -387,7 +387,7 @@ hard to discriminate on short ladders. Read `stdLogC` to gauge how
 good the closest match actually is; values above ~1.0 mean even the
 winner doesn't fit well.
 
-# What `compare` shows on divergence
+# Compare divergence reports
 
 `compare A B [C …]` runs each named benchmark, intersects their
 common params, and hashes every result. When the hashes disagree

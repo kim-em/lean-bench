@@ -128,7 +128,7 @@ in the user's `.olean`.
 instance, else `none` after forcing the result. Uniform type
 avoids type-level branching leaking through the design.
 
-# What's intentionally NOT in v0.1
+# What is not in v0.1
 
 - *Elaboration-time subprocess sanity check* ("does `f 0` finish
   in < 1s?"). Considered and rejected: it makes the elaborator
@@ -155,7 +155,7 @@ avoids type-level branching leaking through the design.
   enough signal-to-noise for the orders of magnitude we care
   about.
 
-# Per-benchmark configuration: `where { ... }` and CLI overrides
+# Per-benchmark configuration
 
 A `BenchmarkConfig` can be tightened in two layered places:
 
