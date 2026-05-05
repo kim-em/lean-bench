@@ -7,6 +7,9 @@ package docs where
     if System.Platform.isOSX then
       #["-Wl,-ignore_optimization_hints"]
     else #[]
+  leanOptions := #[
+    ⟨`weak.verso.code.warnLineLength, .ofNat 80⟩
+  ]
 
 require verso from git
   "https://github.com/leanprover/verso.git" @ "v4.30.0-rc2"

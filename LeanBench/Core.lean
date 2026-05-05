@@ -307,7 +307,7 @@ structure BenchmarkConfig where
       rather than algorithm work. Rows below this threshold are
       flagged `belowSignalFloor` (rendered with a `[<floor]`
       annotation) and excluded from the verdict reduction. Default
-      `10.0` matches the rule of thumb in `doc/quickstart.md` ("any
+      `10.0` matches the rule of thumb in `https://kim-em.github.io/lean-bench/Quickstart/` ("any
       data point with total_nanos smaller than ~10× the spawn floor
       is noise"). Set to `1.0` to disable the check (every row is
       retained); values ≤ 0 are rejected by `validate`. See issue

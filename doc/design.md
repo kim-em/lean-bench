@@ -1,7 +1,7 @@
 # Design
 
 Architectural rationale for the v0.1 cut. See [PLAN.md](../PLAN.md)
-for v0.2+ planned features and [quickstart.md](quickstart.md) for
+for v0.2+ planned features and [https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/) for
 user-facing usage.
 
 ## Subprocess per measurement

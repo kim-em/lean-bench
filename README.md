@@ -75,9 +75,9 @@ guess (or `1`) and pass `--auto-fit` to see a ranked list of
 suggestions from a fixed catalog (`1`, `n`, `n log n`, `n²`, `n³`,
 `2ⁿ`) — the heuristic ranks each model by how constant `C =
 perCallNanos / model(n)` ends up across the ladder. See
-[doc/quickstart.md#auto-fit](doc/quickstart.md#auto-fit).
+[the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/Auto-fit/).
 
-See [doc/quickstart.md](doc/quickstart.md#configuring-a-benchmark)
+See [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/Configuring-a-benchmark/)
 for the full flag list.
 
 `lakefile.toml`:
@@ -95,7 +95,7 @@ root = "MyBenchmarks"
 
 Then `lake exe my_benchmarks list / run NAME / compare A B / verify /
 profile NAME --profiler "perf record -g --"`.
-See [doc/quickstart.md](doc/quickstart.md) and
+See the [deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) and
 [doc/profiling.md](doc/profiling.md).
 
 ## Fixed-problem benchmarks
@@ -116,7 +116,7 @@ and the [quickstart](doc/quickstart.md#fixed-problem-benchmarks).)
 The runner does one warmup call followed by `repeats` measured calls
 (default 5), reports median / min / max wall time, and hash-checks
 across repeats. `run`, `compare`, `list`, and `verify` all dispatch
-by registration kind. See [doc/quickstart.md](doc/quickstart.md#fixed-problem-benchmarks)
+by registration kind. See [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/Fixed-problem-benchmarks/)
 for the full guide.
 
 ## Status
@@ -124,7 +124,7 @@ for the full guide.
 v0.1. Linux and macOS are exercised in CI. Windows builds in CI but
 the test suite isn't run there yet — reports of breakage welcome.
 See [PLAN.md](PLAN.md) for the
-v0.2+ roadmap, [doc/quickstart.md](doc/quickstart.md) for the
+v0.2+ roadmap, [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) for the
 user guide, [doc/pitfalls.md](doc/pitfalls.md) for Lean-specific
 benchmarking pitfalls (bignum `Nat`, forcing evaluation, sharing,
 warm vs. cold), [doc/profiling.md](doc/profiling.md) for the

@@ -1,6 +1,7 @@
 import VersoManual
 import BenchDocs.Block.Bench
-import BenchDocs.Pages.Placeholder
+import BenchDocs.Block.TempProj
+import BenchDocs.Pages.Quickstart
 
 open Verso.Genre Manual
 
@@ -19,4 +20,4 @@ embedded Lean snippet is elaborated against the live API and every documented
 shell invocation is executed and diffed at doc-build time, so the docs cannot
 silently drift from the binary's behaviour.
 
-{include 0 BenchDocs.Pages.Placeholder}
+{include 0 BenchDocs.Pages.Quickstart}

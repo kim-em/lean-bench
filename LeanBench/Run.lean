@@ -61,7 +61,7 @@ benchmark boundaries). Each child spawn is still independently capped
 by `maxSecondsPerCall`, so the worst-case bound on total wall time is
 approximately `total_seconds + maxSecondsPerCall` (one rung may have
 been in flight when the deadline was checked). See
-[`doc/quickstart.md#ci-budget-mode`](../doc/quickstart.md#ci-budget-mode). -/
+[`https://kim-em.github.io/lean-bench/Quickstart/`](../https://kim-em.github.io/lean-bench/Quickstart/). -/
 abbrev BudgetDeadline := Nat
 
 /-- Has the deadline passed? `none` (no budget) is always `false`. -/

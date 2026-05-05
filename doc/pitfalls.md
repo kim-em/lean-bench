@@ -17,7 +17,7 @@ does not handle is the point of this document.
 
 For background on the harness mechanics referenced below, see
 [design.md](design.md). For the user-facing setup, see
-[quickstart.md](quickstart.md).
+[https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/).
 
 ## 1. `Nat` is bignum: arithmetic cost depends on the value
 
@@ -149,7 +149,7 @@ Two practical responses:
   The summary needs to actually depend on every part of the work,
   otherwise the compiler may DCE the parts you don't observe.
 - **Use `with prep := …` for setup that should not be re-timed.**
-  See [quickstart.md](quickstart.md#optional-per-param-setup-with-with-prep--).
+  See [https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/).
   The prep result is hashed once, before timing begins, so its
   construction cost is paid up front and not folded into every
   inner iteration.
@@ -258,7 +258,7 @@ few rungs of the ladder are systematically slower than the
 asymptotic regime would predict. The harness reports per-call wall
 time including this overhead and trims the leading
 `verdictWarmupFraction` (20% by default) of ratios before fitting
-the slope ([quickstart.md](quickstart.md#configuring-a-benchmark)).
+the slope ([https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/)).
 
 What this means in practice:
 
@@ -310,7 +310,7 @@ For a `setup_fixed_benchmark` registration there is no parameter
 sweep. The harness runs one warmup call followed by `repeats`
 measured calls (default 5) and reports median, min, max, plus a
 hash-agreement check across repeats
-([quickstart.md](quickstart.md#fixed-problem-benchmarks)). Two
+([https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/)). Two
 things to watch for:
 
 - **Non-determinism shows up as hash divergence.** Different hashes

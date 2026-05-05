@@ -18,7 +18,7 @@ files at the location it chose.
 This page documents four end-to-end workflows. None of them require
 modifying your `setup_benchmark` declarations. All of them assume
 you already have a populated benchmark binary; if not, see
-[`quickstart.md`](quickstart.md) first.
+[`https://kim-em.github.io/lean-bench/Quickstart/`](https://kim-em.github.io/lean-bench/Quickstart/) first.
 
 ## How `profile` works
 

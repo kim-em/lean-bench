@@ -1,6 +1,6 @@
 # Advanced
 
-Beyond the basics in [quickstart.md](quickstart.md). All of this is
+Beyond the basics in [https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/). All of this is
 v0.1; v0.2+ items live in [PLAN.md](../PLAN.md).
 
 ## Comparing implementations
@@ -42,7 +42,7 @@ agreement: DIVERGED on 2 params — earliest divergence at param=4:
     Sample.linearFn  hash=0xabc    (baseline)
     Sample.otherFn   hash=0xdef    differs from Sample.linearFn
   also diverged at: 8
-  (only result hashes are available; see doc/quickstart.md for what to expect)
+  (only result hashes are available; see https://kim-em.github.io/lean-bench/Quickstart/ for what to expect)
 ```
 
 Hashes are reported as hex literals. The `also diverged at:` line
@@ -52,7 +52,7 @@ implementations are entirely different functions". Result *previews*
 (short string snapshots of the actual return values) are not
 recorded today — the wire format only carries hashes, and a 64-bit
 hash gives no way to recover the input. See
-[quickstart.md](quickstart.md#what-compare-shows-on-divergence) for
+[https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/) for
 the recommended debugging workflow when only hashes are available.
 
 ## Reading the verdict
@@ -310,7 +310,7 @@ overall job-level bound use the CI system's own timeout (e.g.
 GitHub Actions' `timeout-minutes` shown above) rather than a shell
 wrapper. The same per-call flags work on `compare`, so you can pin a
 comparison run to a tight wallclock budget without recompiling. See
-[quickstart.md](quickstart.md#configuring-a-benchmark) for the full
+[https://kim-em.github.io/lean-bench/Quickstart/](https://kim-em.github.io/lean-bench/Quickstart/) for the full
 flag list and the matching declaration-time `where { … }` syntax.
 
 When a benchmark's natural ladder is far larger than CI allows, ship
