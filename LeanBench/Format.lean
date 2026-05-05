@@ -732,7 +732,7 @@ def fmtFixedComparison (rep : FixedComparisonReport) : String := Id.run do
     for line in fmtHashTable detail.hashes detail.dissenters do
       lines := lines.push line
     lines := lines.push
-      "  (only result hashes are available; see doc/quickstart.md for what to expect)"
+      "  (only result hashes are available; see https://kim-em.github.io/lean-bench/Quickstart/ for what to expect)"
   return "\n".intercalate lines.toList
 
 /-- Render one verify report. Passing reports render as a single
@@ -784,7 +784,7 @@ def fmtCombinedVerify (r : CombinedVerifyReports) : String := Id.run do
     function's hash at that param is laid out side-by-side, and
     later-diverging params are listed compactly. The hash-only
     output is what users see today; full result previews are not
-    yet recorded — see [`doc/quickstart.md`](../../doc/quickstart.md)
+    yet recorded — see [`https://kim-em.github.io/lean-bench/Quickstart/`](../../https://kim-em.github.io/lean-bench/Quickstart/)
     for what to expect when only hashes are available. -/
 def fmtComparison (rep : ComparisonReport) : String := Id.run do
   let mut lines : Array String := #[]
@@ -819,7 +819,7 @@ def fmtComparison (rep : ComparisonReport) : String := Id.run do
         (later.toList.map (fun d => toString d.param))
       lines := lines.push s!"  also diverged at: {laterParams}"
     lines := lines.push
-      "  (only result hashes are available; see doc/quickstart.md for what to expect)"
+      "  (only result hashes are available; see https://kim-em.github.io/lean-bench/Quickstart/ for what to expect)"
   return "\n".intercalate lines.toList
 
 /-- Like `fmtComparison`, but appends a per-function auto-fit

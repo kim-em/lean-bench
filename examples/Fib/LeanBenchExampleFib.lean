@@ -41,7 +41,11 @@ def badFib : Nat → Nat
   | 1 => 1
   | n + 2 => badFib n + badFib (n + 1)
 
-setup_benchmark goodFib n => n
-setup_benchmark badFib  n => 144 ^ n / 89 ^ n
+setup_benchmark goodFib n => n where {
+  tags := #["fib", "linear"]
+}
+setup_benchmark badFib  n => 144 ^ n / 89 ^ n where {
+  tags := #["fib", "exponential"]
+}
 
 end LeanBench.Examples.Fib

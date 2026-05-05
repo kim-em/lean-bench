@@ -180,7 +180,7 @@ The deadline is also plumbed into `runBenchmark` so a single benchmark
 can be cut short between rungs (the `BenchmarkResult.budgetTruncated`
 flag). The bound on total wall time is therefore approximately
 `total_seconds + maxSecondsPerCall` (one rung may be in flight when
-the deadline trips). See `doc/quickstart.md#ci-budget-mode`. -/
+the deadline trips). See `https://kim-em.github.io/lean-bench/Quickstart/`. -/
 
 /-- A benchmark that wasn't run because the CI budget was exhausted
 before it could start. -/

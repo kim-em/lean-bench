@@ -31,7 +31,7 @@ for selecting benchmarks by tag or name substring. Tags are declared
 via `where { tags := #["sort", "fast"] }` and matched by
 comma-separated OR logic (`--tag sort,fast` matches benchmarks with
 either tag). `--filter Sort` matches benchmarks whose name contains
-"Sort" as a substring. See `doc/quickstart.md#tags-and-filtering`.
+"Sort" as a substring. See `https://kim-em.github.io/lean-bench/Quickstart/`.
 
 CLI parsing uses `Cli` (mhuisi/lean4-cli). The flag-parser plumbing
 and override builders live in [`LeanBench.Cli.Parse`](Cli/Parse.lean);
@@ -80,10 +80,10 @@ Each missing flag leaves the declared value untouched."
     "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
-    "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
-    "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
+    "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See https://kim-em.github.io/lean-bench/Advanced/Cache-modes/."
+    "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See https://kim-em.github.io/lean-bench/Advanced/Outer-trials/."
     "signal-floor-multiplier" : Float; "Parametric only: per-spawn signal-floor multiplier (default 10.0; ≥ 1.0). Rows whose totalNanos is below `multiplier × spawnFloor` are flagged `[<floor]` and excluded from the verdict. `1.0` disables the filter; useful in CI smoke tests on slow runners. Issue #47."
-    "auto-fit";                      "Parametric only: after the verdict, fit a fixed catalog of complexity models (1, n, n*log n, n^2, n^3, 2^n) to the observed per-call timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
+    "auto-fit";                      "Parametric only: after the verdict, fit a fixed catalog of complexity models (1, n, n*log n, n^2, n^3, 2^n) to the observed per-call timings and print a ranked suggestion. Heuristic, not a proof. See https://kim-em.github.io/lean-bench/Quickstart/."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
     "min-total-seconds" : Float;     "Fixed only: auto-tune floor on inner repeats per spawn (s; default 0.001 = 1 ms). The child runs the body once, then doubles the inner-repeat count until total wall time clears this floor. Per-iteration time is reported as total/inner_repeats. Issue #58."
     "ignore-expected-hash";          "Fixed only: clear any declared `expectedHash` for this run, so a hash mismatch no longer fails. For local experimentation when the result is intentionally changing. Issue #55."
@@ -142,10 +142,10 @@ explicit names are used."
     "warmup-fraction" : Float;       "Parametric only: fraction of leading ratios to drop before computing the verdict (e.g. 0.2; JSON-style numbers)."
     "slope-tolerance" : Float;       "Parametric only: verdict is `consistent` iff |β| ≤ this, where β is the log-log slope of C vs param (JSON-style numbers)."
     "param-schedule" : LeanBench.ParamSchedule;  "Parametric only: ladder shape (auto, doubling, or linear). Default auto picks doubling for polynomial growth, linear for exponential."
-    "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See doc/advanced.md#cache-modes."
-    "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See doc/advanced.md#outer-trials."
+    "cache-mode" : LeanBench.CacheMode;           "Parametric only: warm (default) auto-tunes inner repeats inside one child; cold respawns per measurement so cache state is not preserved across rungs. See https://kim-em.github.io/lean-bench/Advanced/Cache-modes/."
+    "outer-trials" : Nat;            "Parametric only: number of independent outer trials per ladder rung (default 1). Bumping this above 1 runs N child spawns per param and reports per-param median / min / max / spread; trades runtime for stability. See https://kim-em.github.io/lean-bench/Advanced/Outer-trials/."
     "signal-floor-multiplier" : Float; "Parametric only: per-spawn signal-floor multiplier (default 10.0; ≥ 1.0). Rows whose totalNanos is below `multiplier × spawnFloor` are flagged `[<floor]` and excluded from the verdict. `1.0` disables the filter; useful in CI smoke tests on slow runners. Issue #47."
-    "auto-fit";                      "Parametric only: after each per-function verdict, fit a fixed catalog of complexity models to the observed timings and print a ranked suggestion. Heuristic, not a proof. See doc/quickstart.md#auto-fit."
+    "auto-fit";                      "Parametric only: after each per-function verdict, fit a fixed catalog of complexity models to the observed timings and print a ranked suggestion. Heuristic, not a proof. See https://kim-em.github.io/lean-bench/Quickstart/."
     "repeats" : Nat;                 "Fixed only: number of measured invocations after the warmup call (default 5)."
     "min-total-seconds" : Float;     "Fixed only: auto-tune floor on inner repeats per spawn (s; default 0.001 = 1 ms). The child runs the body once, then doubles the inner-repeat count until total wall time clears this floor. Per-iteration time is reported as total/inner_repeats. Issue #58."
     "ignore-expected-hash";          "Fixed only: clear any declared `expectedHash` for this run, so a hash mismatch no longer fails. For local experimentation when the result is intentionally changing. Issue #55."
@@ -170,11 +170,11 @@ verdict, no kill-on-cap (profilers can be slow to flush their own
 output). The benchmark's declared cacheMode is honoured — pin
 `--cache-mode cold` for one-shot first-touch profiling, leave it at
 `warm` (default) so the autotuner exercises the function many times
-inside one profiler invocation. See doc/profiling.md for end-to-end
+inside one profiler invocation. See https://kim-em.github.io/lean-bench/Profiling/ for end-to-end
 workflows with perf, samply, heaptrack, and time -v.
 
 Linux-first: --profiler is opaque, so any tool the user has on PATH
-works, but the canned workflows in doc/profiling.md focus on perf
+works, but the canned workflows in https://kim-em.github.io/lean-bench/Profiling/ focus on perf
 and samply on Linux. macOS users have Instruments and dtrace; Windows
 users have ETW. The harness side is platform-neutral."
 

@@ -1,5 +1,7 @@
 # lean-bench
 
+Documentation: <https://kim-em.github.io/lean-bench/>
+
 Microbenchmark library for Lean 4. Declare a benchmark and the
 complexity model you expect; run it; the harness reports per-call
 times across an adaptive parameter ladder and the ratio
@@ -75,9 +77,9 @@ guess (or `1`) and pass `--auto-fit` to see a ranked list of
 suggestions from a fixed catalog (`1`, `n`, `n log n`, `n²`, `n³`,
 `2ⁿ`) — the heuristic ranks each model by how constant `C =
 perCallNanos / model(n)` ends up across the ladder. See
-[doc/quickstart.md#auto-fit](doc/quickstart.md#auto-fit).
+[the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/Auto-fit/).
 
-See [doc/quickstart.md](doc/quickstart.md#configuring-a-benchmark)
+See [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/Configuring-a-benchmark/)
 for the full flag list.
 
 `lakefile.toml`:
@@ -95,8 +97,8 @@ root = "MyBenchmarks"
 
 Then `lake exe my_benchmarks list / run NAME / compare A B / verify /
 profile NAME --profiler "perf record -g --"`.
-See [doc/quickstart.md](doc/quickstart.md) and
-[doc/profiling.md](doc/profiling.md).
+See the [deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) and
+[the Profiling page](https://kim-em.github.io/lean-bench/Profiling/).
 
 ## Fixed-problem benchmarks
 
@@ -116,7 +118,7 @@ and the [quickstart](doc/quickstart.md#fixed-problem-benchmarks).)
 The runner does one warmup call followed by `repeats` measured calls
 (default 5), reports median / min / max wall time, and hash-checks
 across repeats. `run`, `compare`, `list`, and `verify` all dispatch
-by registration kind. See [doc/quickstart.md](doc/quickstart.md#fixed-problem-benchmarks)
+by registration kind. See [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/Fixed-problem-benchmarks/)
 for the full guide.
 
 ## Status
@@ -124,12 +126,12 @@ for the full guide.
 v0.1. Linux and macOS are exercised in CI. Windows builds in CI but
 the test suite isn't run there yet — reports of breakage welcome.
 See [PLAN.md](PLAN.md) for the
-v0.2+ roadmap, [doc/quickstart.md](doc/quickstart.md) for the
-user guide, [doc/pitfalls.md](doc/pitfalls.md) for Lean-specific
+v0.2+ roadmap, [the deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) for the
+user guide, [the Pitfalls page](https://kim-em.github.io/lean-bench/Lean-specific-benchmarking-pitfalls/) for Lean-specific
 benchmarking pitfalls (bignum `Nat`, forcing evaluation, sharing,
-warm vs. cold), [doc/profiling.md](doc/profiling.md) for the
+warm vs. cold), [the Profiling page](https://kim-em.github.io/lean-bench/Profiling/) for the
 external-profiler integration (`perf`, `samply`, `heaptrack`,
-`/usr/bin/time -v`), and [doc/schema.md](doc/schema.md) for the
+`/usr/bin/time -v`), and [the Result schema page](https://kim-em.github.io/lean-bench/Result-schema/) for the
 JSONL result-row schema and its evolution rules.
 
 ## Design
@@ -144,7 +146,7 @@ in-process interrupt for arbitrary computation, so the only reliable
 way to enforce a wallclock cap is to give each measurement its own
 process.
 
-See [doc/design.md](doc/design.md) for the full architectural
+See [the Design page](https://kim-em.github.io/lean-bench/Design/) for the full architectural
 rationale, including limits and known caveats.
 
 ## Caveats
@@ -162,7 +164,7 @@ Lean's `Nat` is bignum, the compiler hoists pure work out of loops
 unless its result is observed, and reference-counted sharing can
 flip operations between O(1) and O(n) depending on aliasing — these
 and other Lean-specific traps are covered in
-[doc/pitfalls.md](doc/pitfalls.md). Read it before declaring a
+[the Pitfalls page](https://kim-em.github.io/lean-bench/Lean-specific-benchmarking-pitfalls/). Read it before declaring a
 benchmark you're going to commit to a CI baseline.
 
 The verdict is a thresholded log-log slope (`|β| ≤ 0.15` over the

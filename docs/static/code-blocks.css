@@ -1,0 +1,58 @@
+/* Code-block styling for the lean-bench docs. Verso's default theme
+ * leaves <pre> backgrounds transparent, which makes blocks blend
+ * into prose. We add a subtle background, padding, and border, and
+ * differentiate "terminal session" blocks (introduced by the bench
+ * / tempProjRun directives — first line starts with `$ `) from
+ * generic source-code blocks. */
+
+/* Base treatment for every preformatted block (Lean source, TOML,
+ * file content, output literals). */
+pre {
+  background: #f5f7fa;
+  border: 1px solid #d8dde3;
+  border-radius: 4px;
+  padding: 0.65em 0.9em;
+  margin: 0.6em 0;
+  line-height: 1.45;
+}
+
+/* Verso's syntax-highlighted Lean blocks live inside their own
+ * `<pre class="hl lean block">` wrapper. Match the same surface
+ * treatment so highlighted Lean and plain pre look like a family. */
+.hl.lean.block,
+pre.hl.lean.block {
+  background: #f5f7fa;
+  border: 1px solid #d8dde3;
+  border-radius: 4px;
+  padding: 0.65em 0.9em;
+  margin: 0.6em 0;
+}
+
+/* Inline `<code>` (single-backticked spans in prose) gets a much
+ * lighter tint just so it pops out of running text. */
+:not(pre) > code,
+p > code,
+li > code,
+td > code,
+th > code,
+h1 > code, h2 > code, h3 > code, h4 > code, h5 > code, h6 > code {
+  background: #eef1f5;
+  padding: 0.05em 0.3em;
+  border-radius: 3px;
+}
+
+/* Terminal sessions: bench blocks, tempProjRun blocks, and any
+ * benchTranscript whose body is a literal terminal capture. We
+ * detect these in JS by scanning for blocks whose first line begins
+ * with `$ ` (the synthetic prompt the directives prepend). */
+pre.terminal {
+  background: #1d1f21;
+  color: #e8e8e8;
+  border-color: #2c2e30;
+}
+
+/* Inside a terminal block, dim the prompt-line and command so that
+ * the output below it is the visual focus. */
+pre.terminal .prompt-line {
+  color: #8fb8f5;
+}

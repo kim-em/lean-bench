@@ -23,7 +23,7 @@ threading an `Option` through every code path; the field on the
 in-memory result *is* an `Option` so "we never captured" stays
 distinguishable from "we captured but every field was unknown."
 
-Field semantics live in `doc/schema.md#environment-metadata`. Fields
+Field semantics live in `https://kim-em.github.io/lean-bench/Result-schema/Environment-metadata/`. Fields
 typed `Option α` are best-effort: we capture them when we can and
 emit an explicit `null` rather than silently omitting (per the
 issue #11 acceptance criterion). Always-present fields are
@@ -223,10 +223,10 @@ allocator first-touch, and any per-call overhead the warm path
 amortises away. Note that "cold" here means "no harness-side
 warmup," not "guaranteed cold hardware" — the OS / CPU may still
 carry parts of the working set across spawns; see
-`doc/advanced.md#cache-modes`.
+`https://kim-em.github.io/lean-bench/Advanced/Cache-modes/`.
 
 Neither mode is "more correct" — they measure different things. Read
-the docs in `doc/advanced.md#cache-modes` for when each is
+the docs in `https://kim-em.github.io/lean-bench/Advanced/Cache-modes/` for when each is
 appropriate. The wire format records the mode used on every
 parametric JSONL row so post-hoc analysis can keep them apart. -/
 inductive CacheMode
@@ -300,14 +300,14 @@ structure BenchmarkConfig where
       current inner-repeat-in-child design; `.cold` respawns for every
       rung and runs the function exactly once per spawn so cache state
       is not preserved across measurements. The two modes measure
-      different things; see `doc/advanced.md#cache-modes`. -/
+      different things; see `https://kim-em.github.io/lean-bench/Advanced/Cache-modes/`. -/
   cacheMode : CacheMode := .warm
   /-- Multiplier on the per-spawn floor below which a row's
       `totalNanos` is treated as dominated by subprocess overhead
       rather than algorithm work. Rows below this threshold are
       flagged `belowSignalFloor` (rendered with a `[<floor]`
       annotation) and excluded from the verdict reduction. Default
-      `10.0` matches the rule of thumb in `doc/quickstart.md` ("any
+      `10.0` matches the rule of thumb in `https://kim-em.github.io/lean-bench/Quickstart/` ("any
       data point with total_nanos smaller than ~10× the spawn floor
       is noise"). Set to `1.0` to disable the check (every row is
       retained); values ≤ 0 are rejected by `validate`. See issue

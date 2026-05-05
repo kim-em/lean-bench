@@ -61,7 +61,7 @@ benchmark boundaries). Each child spawn is still independently capped
 by `maxSecondsPerCall`, so the worst-case bound on total wall time is
 approximately `total_seconds + maxSecondsPerCall` (one rung may have
 been in flight when the deadline was checked). See
-[`doc/quickstart.md#ci-budget-mode`](../doc/quickstart.md#ci-budget-mode). -/
+[`https://kim-em.github.io/lean-bench/Quickstart/`](../https://kim-em.github.io/lean-bench/Quickstart/). -/
 abbrev BudgetDeadline := Nat
 
 /-- Has the deadline passed? `none` (no budget) is always `false`. -/
@@ -74,7 +74,7 @@ def deadlineExceeded? (deadline? : Option BudgetDeadline) : IO Bool := do
 
 /-- Parse the child's JSONL row into a `DataPoint`.
 
-Schema-compatibility contract (see [`doc/schema.md`](../../doc/schema.md)):
+Schema-compatibility contract (see [`https://kim-em.github.io/lean-bench/Result-schema/`](https://kim-em.github.io/lean-bench/Result-schema/)):
 
 - `schema_version` outside `Schema.supportedVersions` is rejected
   with an explicit error.
@@ -178,7 +178,7 @@ private def withEnvArg (args : Array String) (env? : Option Env) : Array String 
     `kill(2)` on a reaped pid (the kernel may have recycled it):
     the parent sets `mainDoneRef` under the lock before `child.wait`,
     and the killer only fires after re-reading `mainDoneRef` under
-    the same lock. Full design: doc/design.md. -/
+    the same lock. Full design: https://kim-em.github.io/lean-bench/Design/. -/
 def spawnWithCap (exe : String) (args : Array String)
     (deadlineMs : UInt32) : IO SpawnOutcome := do
   let child ← IO.Process.spawn {

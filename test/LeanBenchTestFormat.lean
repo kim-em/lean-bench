@@ -242,7 +242,7 @@ def testFmtComparison : IO UInt32 := do
     "agreement: DIVERGED on 1 param — earliest divergence at param=2:\n" ++
     "    Sample.linearFn  hash=0xabc    (baseline)\n" ++
     "    Sample.otherFn   hash=0xdef    differs from Sample.linearFn\n" ++
-    "  (only result hashes are available; see doc/quickstart.md for what to expect)"
+    "  (only result hashes are available; see https://kim-em.github.io/lean-bench/Quickstart/ for what to expect)"
   snapshot "fmtComparison" expected (Format.fmtComparison sampleComparison)
 
 /-- Multi-divergence: the earliest diverging param is highlighted

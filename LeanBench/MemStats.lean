@@ -20,7 +20,7 @@ Two metrics are modelled:
   Lean 4 today, so the field is always `none`. It exists so the
   schema, parsers, exporters, and report renderers all have a place
   for the value to land once a future Lean release exposes it. See
-  [`doc/schema.md#memory-metrics`](../doc/schema.md#memory-metrics)
+  [`https://kim-em.github.io/lean-bench/Result-schema/Memory-metrics/`](https://kim-em.github.io/lean-bench/Result-schema/Memory-metrics/)
   for the platform notes.
 
 Both fields are optional on the wire format and treated as `null`
