@@ -44,9 +44,7 @@ end LeanBench.Test.Schema
 private def schemaProbeName : Lean.Name := `LeanBench.Test.Schema.schemaProbe
 private def schemaFixedProbeName : Lean.Name := `LeanBench.Test.Schema.schemaFixedProbe
 
-/-- Substring containment helper. -/
-private def containsSub (haystack needle : String) : Bool :=
-  ((haystack.splitOn needle).length) > 1
+private def containsSub := LeanBench.Cli.containsSub
 
 /-- Spawn the running binary in `_child` mode and return its stdout. -/
 private def spawnChild (args : List String) : IO (UInt32 × String) := do

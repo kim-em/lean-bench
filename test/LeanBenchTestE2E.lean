@@ -91,9 +91,7 @@ private def littleName     : Lean.Name := `LeanBench.Test.E2E.littleFn
 private def littlePrimeName : Lean.Name := `LeanBench.Test.E2E.littleFn'
 private def littleTwinName : Lean.Name := `LeanBench.Test.E2E.littleFnTwin
 
-/-- `String.contains` is `Char`-only; this is a substring check. -/
-private def containsSub (haystack needle : String) : Bool :=
-  ((haystack.splitOn needle).length) > 1
+private def containsSub := LeanBench.Cli.containsSub
 
 /-! ## End-to-end `runBenchmark` -/
 

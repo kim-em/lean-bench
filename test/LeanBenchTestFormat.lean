@@ -23,8 +23,7 @@ Coverage:
 - `fmtFixedResult`         (multi-row fixed table)
 - `fmtFixedComparison`     (multi-result fixed report)
 - `fmtVerifyReport`        (passing AND failing)
-- `fmtVerify`              (multi-report summary)
-- `fmtCombinedVerify`      (parametric + fixed)
+- `fmtCombinedVerify`      (multi-report summary; parametric + fixed)
 -/
 
 open LeanBench
@@ -47,9 +46,7 @@ private def snapshot (label expected actual : String) : IO UInt32 := do
 
 private def sampleSpec : BenchmarkSpec :=
   { name := `Sample.linearFn
-  , complexityName := `Sample.linearFn._leanBench_complexity
   , complexityFormula := "n"
-  , runCheckedName := `Sample.linearFn._leanBench_runChecked
   , hashable := true
   , config := {} }
 
@@ -58,7 +55,6 @@ private def sampleNoHashSpec : BenchmarkSpec :=
 
 private def sampleFixedSpec : FixedSpec :=
   { name := `Sample.cheap
-  , runnerName := `Sample.cheap._leanBench_runner
   , hashable := true
   , config := { repeats := 3 } }
 
@@ -341,7 +337,8 @@ def testFmtVerifyMulti : IO UInt32 := do
     "  [FAIL] Sample.brokenFn\n" ++
     "         —  child error at param=1: kapow\n" ++
     "1 of 2 benchmark(s) failed verification"
-  snapshot "fmtVerify.multi" expected (Format.fmtVerify #[pass, fail])
+  snapshot "fmtVerify.multi" expected
+    (Format.fmtCombinedVerify { parametric := #[pass, fail], fixed := #[] })
 
 /-! ## Env summary in reports (issue #11)
 
@@ -446,7 +443,7 @@ def main : IO UInt32 := do
       ("fmtFixedComparison", testFmtFixedComparison),
       ("fmtVerifyReport.pass", testFmtVerifyPass),
       ("fmtVerifyReport.fail", testFmtVerifyFail),
-      ("fmtVerify.multi", testFmtVerifyMulti),
+      ("fmtCombinedVerify.multi", testFmtVerifyMulti),
       ("fmtCombinedVerify", testFmtCombinedVerify),
       ("fmtResult.withEnv", testFmtResultWithEnv),
       ("fmtComparison.withEnv", testFmtComparisonWithEnv),

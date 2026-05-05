@@ -61,12 +61,8 @@ namespace LeanBench
     - `"  samply  record  --"`   → `#["samply", "record", "--"]`
     - `""`                       → `#[]` (caller treats as "no profiler") -/
 def profileTokens (cmd : String) : Array String :=
-  cmd.splitOn " " |>.foldl (init := (#[] : Array String)) fun acc raw =>
-    -- Inner trim handles the tab / newline case (`cmd.split` only
-    -- splits on space; an embedded tab from a here-doc would survive
-    -- as part of a token and confuse the spawned profiler).
-    let tok := raw.trimAscii.toString
-    if tok.isEmpty then acc else acc.push tok
+  cmd.split Char.isWhitespace
+    |>.filter (! ·.isEmpty) |>.map (·.toString) |>.toArray
 
 /-- Build the argv that wraps the child invocation under the profiler.
 

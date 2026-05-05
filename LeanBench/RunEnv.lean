@@ -40,7 +40,7 @@ platform Lean's process API actually supports today is a
 Linux-flavored Unix; the field is informational, and a more
 specific probe (e.g. distinguishing FreeBSD) would belong in a
 later metadata revision. -/
-def detectOs : String :=
+private def detectOs : String :=
   if System.Platform.isWindows then "windows"
   else if System.Platform.isOSX then "macos"
   else if System.Platform.isEmscripten then "emscripten"
@@ -48,7 +48,7 @@ def detectOs : String :=
 
 /-- Architecture parsed from the LLVM target triple's leading
 segment. Returns `none` when the triple is empty or has no `-`. -/
-def parseArch (target : String) : Option String :=
+private def parseArch (target : String) : Option String :=
   if target.isEmpty then none
   else
     match target.splitOn "-" with
@@ -68,7 +68,7 @@ process fails to spawn, exits non-zero, or emits an exception. The
 trimmed stdout is returned on success; an empty stdout collapses to
 `none` so callers don't have to special-case the "command exists
 but produced nothing" case. -/
-def tryRun (cmd : String) (args : Array String) : IO (Option String) := do
+private def tryRun (cmd : String) (args : Array String) : IO (Option String) := do
   try
     let out ← IO.Process.output { cmd, args, stdin := .null }
     if out.exitCode == 0 then
@@ -80,7 +80,7 @@ def tryRun (cmd : String) (args : Array String) : IO (Option String) := do
 
 /-- Best-effort hostname: try `hostname` (POSIX), fall back to the
 `HOSTNAME` / `COMPUTERNAME` env vars. Each step swallows errors. -/
-def detectHostname : IO (Option String) := do
+private def detectHostname : IO (Option String) := do
   match ← tryRun "hostname" #[] with
   | some h => return some h
   | none =>
@@ -96,7 +96,7 @@ Linux-only; collapses to `none` on every other OS or when the file
 is missing. We deliberately don't shell out to `sysctl` on macOS or
 `wmic` on Windows to keep the probe quiet — that's a future
 extension when there's a clear ask. -/
-def detectCpuModel : IO (Option String) := do
+private def detectCpuModel : IO (Option String) := do
   if System.Platform.isOSX || System.Platform.isWindows
      || System.Platform.isEmscripten then
     return none
@@ -116,7 +116,7 @@ def detectCpuModel : IO (Option String) := do
 /-- Logical core count. Linux: count `processor` lines in
 `/proc/cpuinfo`. macOS / Windows: best-effort env vars
 (`NUMBER_OF_PROCESSORS`); falls back to `none`. -/
-def detectCpuCores : IO (Option Nat) := do
+private def detectCpuCores : IO (Option Nat) := do
   if System.Platform.isWindows then
     match ← IO.getEnv "NUMBER_OF_PROCESSORS" with
     | some s => return s.toNat?
@@ -136,7 +136,7 @@ def detectCpuCores : IO (Option Nat) := do
 nothing in lean-bench's hot path depends on git, so a missing
 binary just collapses to `none`. The output is the full 40-char
 SHA — we don't truncate, since downstream tooling can do that. -/
-def detectGitCommit : IO (Option String) := do
+private def detectGitCommit : IO (Option String) := do
   match ← tryRun "git" #["rev-parse", "HEAD"] with
   | some s =>
     -- `git rev-parse` succeeds with an empty output in pathological
@@ -146,7 +146,7 @@ def detectGitCommit : IO (Option String) := do
 
 /-- True iff `git status --porcelain` reports any change. `none`
 when `git` itself is unavailable. -/
-def detectGitDirty : IO (Option Bool) := do
+private def detectGitDirty : IO (Option Bool) := do
   -- We use the same swallow-everything `tryRun` and key on whether
   -- the output is empty: `--porcelain` prints one line per dirty
   -- entry, nothing on a clean tree. A missing git binary or a
@@ -164,12 +164,9 @@ def detectGitDirty : IO (Option Bool) := do
 /-- Basename of the running executable (e.g. `"fib_benchmark_example"`).
 Strips both POSIX `/` and Windows `\\` separators so a Windows path
 like `C:\\foo\\bar.exe` resolves cleanly. -/
-def detectExeName : IO String := do
+private def detectExeName : IO String := do
   let path := (← IO.appPath).toString
-  let mut last : String := path
-  for slice in path.split (fun c => c == '/' || c == '\\') do
-    last := slice.toString
-  return last
+  return (path.takeEndWhile (fun c => c != '/' && c != '\\')).toString
 
 /-! ## Wallclock formatting -/
 
@@ -184,7 +181,7 @@ private def padNat (n : Nat) (w : Nat) : String :=
 Sub-second precision is dropped to keep the format readable in
 report headers; the millisecond resolution is still available via
 `timestampUnixMs` for tooling that wants it. -/
-def fmtIso8601 (dt : Std.Time.PlainDateTime) : String :=
+private def fmtIso8601 (dt : Std.Time.PlainDateTime) : String :=
   let y : Int := dt.date.year
   let yStr := if y < 0 then "-" ++ padNat (Int.toNat (-y)) 4
               else padNat (Int.toNat y) 4

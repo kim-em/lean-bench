@@ -247,7 +247,7 @@ where
     | some t =>
       elabCommand <| ← `(command|
         def $cfgIdent : LeanBench.BenchmarkConfig := $t)
-    -- `quote` the `Name`s so the runtime registry key stays
+    -- `quote` the `Name` so the runtime registry key stays
     -- hierarchical; `Name.mkSimple "a.b.c"` would produce an atomic
     -- name whose `toString` wraps it in guillemets.
     -- `reprint` preserves trailing whitespace from source, which
@@ -256,35 +256,16 @@ where
       (complexityTerm.raw.reprint.getD (toString complexityTerm.raw)).trimAscii.toString
     let formulaLit := Syntax.mkStrLit formulaStr
     let fnNameSyn  : Term := quote fnName
-    let cNameSyn   : Term := quote cName
-    let rNameSyn   : Term := quote rName
-    let cfgNameSyn : Term := quote cfgDeclName
     let isHashableSyn := mkIdent (if isHashable then ``true else ``false)
     elabCommand <| ← `(command|
       initialize do
         LeanBench.register
           { name := $fnNameSyn
-            complexityName := $cNameSyn
             complexityFormula := $formulaLit
-            runCheckedName := $rNameSyn
-            configDeclName := $cfgNameSyn
             hashable := $isHashableSyn
             config := $cfgIdent }
           $rIdent
           $cIdent)
-    -- The persistent extension stores `config := {}` plus a
-    -- `configDeclName`; compile-time tooling resolves the auto-
-    -- generated def to recover the actual declared config. Keeps the
-    -- persistent extension free of unsafe elaboration-time evaluation.
-    let spec : BenchmarkSpec :=
-      { name := fnName
-        complexityName := cName
-        complexityFormula := formulaStr
-        runCheckedName := rName
-        configDeclName := cfgDeclName
-        hashable := isHashable
-        config := {} }
-    modifyEnv (addSpec · spec)
 
 /-! ## `setup_fixed_benchmark` — fixed-problem registration
 
@@ -410,27 +391,13 @@ where
       elabCommand <| ← `(command|
         def $cfgIdent : LeanBench.FixedBenchmarkConfig := $t)
     let fnNameSyn  : Term := quote fnName
-    let rNameSyn   : Term := quote rName
-    let cfgNameSyn : Term := quote cfgDeclName
     let isHashableSyn := mkIdent (if isHashable then ``true else ``false)
     elabCommand <| ← `(command|
       initialize do
         LeanBench.registerFixed
           { name := $fnNameSyn
-            runnerName := $rNameSyn
-            configDeclName := $cfgNameSyn
             hashable := $isHashableSyn
             config := $cfgIdent }
           $rIdent)
-    -- Mirrors the parametric convention: persistent extension stores
-    -- `config := {}` plus `configDeclName`; runtime registry holds
-    -- the elaborated `FixedBenchmarkConfig` value.
-    let spec : FixedSpec :=
-      { name := fnName
-        runnerName := rName
-        configDeclName := cfgDeclName
-        hashable := isHashable
-        config := {} }
-    modifyEnv (addFixedSpec · spec)
 
 end LeanBench

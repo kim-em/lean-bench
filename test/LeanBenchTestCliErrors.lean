@@ -29,8 +29,7 @@ doesn't make the test brittle.
 
 open LeanBench
 
-private def containsSub (haystack needle : String) : Bool :=
-  ((haystack.splitOn needle).length) > 1
+private def containsSub := LeanBench.Cli.containsSub
 
 /-! ## Parser-level rejection -/
 

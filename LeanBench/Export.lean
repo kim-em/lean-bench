@@ -91,19 +91,6 @@ private def jOptBool : Option Bool -> Json
   | none   => Json.null
   | some b => Json.bool b
 
-/-- Parse a hex-prefixed UInt64 string like `"0xdeadbeef"`. -/
-private def parseHexU64 (s : String) : Option UInt64 := do
-  guard (s.startsWith "0x")
-  let body := s.drop 2
-  let n := body.foldl (init := 0) fun acc c =>
-    let d :=
-      if c.isDigit then c.toNat - '0'.toNat
-      else if 'a'.toNat <= c.toNat && c.toNat <= 'f'.toNat then c.toNat - 'a'.toNat + 10
-      else if 'A'.toNat <= c.toNat && c.toNat <= 'F'.toNat then c.toNat - 'A'.toNat + 10
-      else 0
-    acc * 16 + d
-  return n.toUInt64
-
 private def jOptHash : Option UInt64 -> Json
   | none   => Json.null
   | some h => jStr s!"0x{String.ofList (Nat.toDigits 16 h.toNat)}"
@@ -259,34 +246,6 @@ def budgetSummaryToJson
     ("skipped",         Json.arr skippedJson)
   ]
 
-/-- Build the top-level export JSON document. -/
-def toJson
-    (parametric : Array BenchmarkResult)
-    (fixed : Array FixedResult)
-    (env? : Option Env := none) :
-    Json :=
-  let results : Array Json :=
-    (parametric.map benchmarkResultToJson) ++
-    (fixed.map fixedResultToJson)
-  Json.mkObj [
-    ("export_schema_version", jNat exportSchemaVersion),
-    ("lean_bench_version",    jStr libraryVersion),
-    ("env",                   match env? with
-                              | some env => RunEnv.toJson env
-                              | none     => Json.null),
-    ("results",               Json.arr results)
-  ]
-
-/-- Write the export document to a file (pretty-printed). -/
-def exportToFile
-    (path : System.FilePath)
-    (parametric : Array BenchmarkResult)
-    (fixed : Array FixedResult)
-    (env? : Option Env := none) :
-    IO Unit := do
-  let json := toJson parametric fixed env?
-  IO.FS.writeFile path (json.pretty ++ "\n")
-
 /-! ## Deserialization: JSON -> types -/
 
 private def parseStatus (s : String) : Status :=
@@ -333,7 +292,7 @@ private def getStr (j : Json) (k : String) (default : String := "") : String :=
 
 def dataPointFromJson (j : Json) : DataPoint :=
   let hashStr := getOptStr j "result_hash"
-  let resultHash : Option UInt64 := hashStr.bind parseHexU64
+  let resultHash : Option UInt64 := hashStr.bind Schema.parseHexU64
   { param            := getNat j "param"
     perCallNanos     := getFloat j "per_call_nanos"
     totalNanos       := getNat j "total_nanos"
@@ -348,7 +307,7 @@ def dataPointFromJson (j : Json) : DataPoint :=
 
 def fixedDataPointFromJson (j : Json) : FixedDataPoint :=
   let hashStr := getOptStr j "result_hash"
-  let resultHash : Option UInt64 := hashStr.bind parseHexU64
+  let resultHash : Option UInt64 := hashStr.bind Schema.parseHexU64
   { repeatIndex := getNat j "repeat_index"
     totalNanos  := getNat j "total_nanos"
     status      := parseStatus (getStr j "status")
@@ -665,16 +624,6 @@ private def fmtPct (pct : Float) : String :=
   let frac := scaled % 10
   s!"{sign}{if pct < 0.0 then "-" else ""}{whole}.{frac}%"
 
-/-- Pad a string on the left with spaces to width `w`. -/
-private def leftpad (s : String) (w : Nat) : String :=
-  let pad := w - s.length
-  if pad > 0 then String.ofList (List.replicate pad ' ') ++ s else s
-
-/-- Pad a string on the right with spaces to width `w`. -/
-private def rightpad (s : String) (w : Nat) : String :=
-  let pad := w - s.length
-  if pad > 0 then s ++ String.ofList (List.replicate pad ' ') else s
-
 /-- Format one `BaselineReport` as a multi-line block. -/
 def fmtBaselineReport (r : BaselineReport) : String := Id.run do
   let mut lines : Array String := #[]
@@ -699,17 +648,17 @@ def fmtBaselineReport (r : BaselineReport) : String := Id.run do
       let wCur   := curStrs.foldl (fun m s => max m s.length) "current".length
       let wPct   := pctStrs.foldl (fun m s => max m s.length) "change".length
       lines := lines.push <|
-        "  " ++ leftpad "param" wParam ++
-        "  " ++ rightpad "baseline" wBase ++
-        "  " ++ rightpad "current" wCur ++
-        "  " ++ rightpad "change" wPct ++
+        "  " ++ Format.leftpad "param" wParam ++
+        "  " ++ Format.rightpad "baseline" wBase ++
+        "  " ++ Format.rightpad "current" wCur ++
+        "  " ++ Format.rightpad "change" wPct ++
         "  status"
       for i in [0 : r.paramComparisons.size] do
         lines := lines.push <|
-          "  " ++ leftpad paramStrs[i]! wParam ++
-          "  " ++ rightpad baseStrs[i]! wBase ++
-          "  " ++ rightpad curStrs[i]! wCur ++
-          "  " ++ rightpad pctStrs[i]! wPct ++
+          "  " ++ Format.leftpad paramStrs[i]! wParam ++
+          "  " ++ Format.rightpad baseStrs[i]! wBase ++
+          "  " ++ Format.rightpad curStrs[i]! wCur ++
+          "  " ++ Format.rightpad pctStrs[i]! wPct ++
           "  " ++ tagStrs[i]!
   | "fixed" =>
     lines := lines.push s!"{r.function}    [fixed baseline comparison]"
@@ -805,6 +754,16 @@ def toJsonWithBaseline
     | some b => withBaseline ++ [("budget", b)]
     | none   => withBaseline
   Json.mkObj allFields
+
+/-- Write the export document to a file (pretty-printed). -/
+def exportToFile
+    (path : System.FilePath)
+    (parametric : Array BenchmarkResult)
+    (fixed : Array FixedResult)
+    (env? : Option Env := none) :
+    IO Unit := do
+  let json := toJsonWithBaseline parametric fixed env?
+  IO.FS.writeFile path (json.pretty ++ "\n")
 
 end Export
 end LeanBench

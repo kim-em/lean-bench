@@ -150,7 +150,7 @@ def testFixedRoundtrip : IO UInt32 := do
     return 0
 
 def testDocumentRoundtrip : IO UInt32 := do
-  let json := Export.toJson #[sampleResultWithEnv] #[sampleFixedResult] (some sampleEnv)
+  let json := Export.toJsonWithBaseline #[sampleResultWithEnv] #[sampleFixedResult] (some sampleEnv)
   let jsonStr := json.pretty
   match Lean.Json.parse jsonStr with
   | .error e =>

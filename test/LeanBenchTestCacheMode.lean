@@ -59,9 +59,7 @@ end LeanBench.Test.CacheMode
 private def warmName : Lean.Name := `LeanBench.Test.CacheMode.cacheProbeFn
 private def coldName : Lean.Name := `LeanBench.Test.CacheMode.cacheProbeColdFn
 
-/-- Substring containment helper. -/
-private def containsSub (haystack needle : String) : Bool :=
-  ((haystack.splitOn needle).length) > 1
+private def containsSub := LeanBench.Cli.containsSub
 
 private def expectEq {α} [BEq α] [Repr α] (label : String) (got want : α) :
     IO UInt32 := do

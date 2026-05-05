@@ -43,8 +43,7 @@ private def expectEq {α} [BEq α] [Repr α] (label : String) (got want : α) :
     throw <| .userError
       s!"{label}: expected {repr want}, got {repr got}"
 
-private def containsSub (haystack needle : String) : Bool :=
-  ((haystack.splitOn needle).length) > 1
+private def containsSub := LeanBench.Cli.containsSub
 
 private def mkOk (param : Nat) (perCall : Float) (trial : Nat := 0) : DataPoint :=
   { param, innerRepeats := 1, totalNanos := perCall.toUInt64.toNat

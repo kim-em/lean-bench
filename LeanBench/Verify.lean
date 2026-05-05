@@ -34,10 +34,10 @@ namespace LeanBench
     work to amortise child startup and exercise the hashing path; we
     don't need a stable measurement. 1ms (so `autoTune` doubles until
     ≥500µs) is well below the default 500ms used by `run`. -/
-def verifyTargetInnerNanos : Nat := 1_000_000
+private def verifyTargetInnerNanos : Nat := 1_000_000
 
 /-- The params we exercise per benchmark. -/
-def verifyParams : Array Nat := #[0, 1]
+private def verifyParams : Array Nat := #[0, 1]
 
 /-- One check inside a `VerifyReport`. -/
 structure VerifyCheck where

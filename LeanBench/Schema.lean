@@ -160,5 +160,18 @@ def statusError       : String := "error"
 def statusStrings : Array String :=
   #[statusOk, statusTimedOut, statusKilledAtCap, statusError]
 
+/-- Parse a hex-prefixed UInt64 string like `"0xdeadbeef"`. -/
+def parseHexU64 (s : String) : Option UInt64 := do
+  guard (s.startsWith "0x")
+  let body := s.drop 2
+  let n := body.foldl (init := 0) fun acc c =>
+    let d :=
+      if c.isDigit then c.toNat - '0'.toNat
+      else if 'a'.toNat ≤ c.toNat ∧ c.toNat ≤ 'f'.toNat then c.toNat - 'a'.toNat + 10
+      else if 'A'.toNat ≤ c.toNat ∧ c.toNat ≤ 'F'.toNat then c.toNat - 'A'.toNat + 10
+      else 0
+    acc * 16 + d
+  return n.toUInt64
+
 end Schema
 end LeanBench

@@ -27,9 +27,7 @@ malformed inputs, so a regression in either layer surfaces here.
 
 open LeanBench
 
-/-- Substring containment helper. `String.contains` is `Char`-only. -/
-private def containsSub (haystack needle : String) : Bool :=
-  ((haystack.splitOn needle).length) > 1
+private def containsSub := LeanBench.Cli.containsSub
 
 /-- A canonical `ok` JSONL row exactly like `Child.emitRow` produces. -/
 private def okJsonlRow : String :=

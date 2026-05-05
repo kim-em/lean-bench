@@ -168,9 +168,7 @@ def testRunNoArgsNoFilters : IO UInt32 := do
 def testFmtSpecTags : IO UInt32 := do
   let tagged : BenchmarkSpec :=
     { name := `foo
-      complexityName := `foo_c
       complexityFormula := "n"
-      runCheckedName := `foo_r
       hashable := true
       config := { tags := #["sort", "fast"] } }
   let s := Format.fmtSpec tagged
@@ -178,9 +176,7 @@ def testFmtSpecTags : IO UInt32 := do
     throw <| .userError s!"expected tags in fmtSpec output: {s}"
   let untagged : BenchmarkSpec :=
     { name := `bar
-      complexityName := `bar_c
       complexityFormula := "n"
-      runCheckedName := `bar_r
       hashable := true
       config := {} }
   let s2 := Format.fmtSpec untagged
