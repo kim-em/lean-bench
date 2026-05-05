@@ -100,6 +100,20 @@ def testParseUnknownStatusBecomesError : IO UInt32 := do
       IO.eprintln s!"expected `.error _`, got {repr s}"
       return 1
 
+def testParseRejectsMalformedHash : IO UInt32 := do
+  let row :=
+    "{\"schema_version\":1,\"kind\":\"parametric\",\"function\":\"foo.bar\"," ++
+    "\"param\":42,\"inner_repeats\":1024,\"total_nanos\":3000000," ++
+    "\"per_call_nanos\":2929.6875,\"result_hash\":\"0xdeadbeeg\"," ++
+    "\"status\":\"ok\",\"error\":null}"
+  match parseChildRow row with
+  | .ok dp =>
+    IO.eprintln s!"expected malformed result_hash to fail, got {repr dp}"
+    return 1
+  | .error msg =>
+    expect s!"malformed-hash parse error mentions result_hash: {msg}"
+      (containsSub msg "result_hash")
+
 /-! ## `classifyChildOutcome` (parametric) -/
 
 def testClassifyKilledAtCap : IO UInt32 := do
@@ -225,6 +239,7 @@ def main : IO UInt32 := do
       ("parse.malformedJson", testParseRejectsMalformedJson),
       ("parse.missingField", testParseRejectsMissingRequiredField),
       ("parse.unknownStatus", testParseUnknownStatusBecomesError),
+      ("parse.malformedHash", testParseRejectsMalformedHash),
       ("classify.killedAtCap", testClassifyKilledAtCap),
       ("classify.killedIgnoresExit", testClassifyKilledIgnoresExit),
       ("classify.okRoundtrip", testClassifyOkRoundtrip),

@@ -84,6 +84,34 @@ private def sampleFixedResult : FixedResult :=
   , maxNanos? := some 1_100_000
   , hashesAgree := true }
 
+private def sampleErrorResult : BenchmarkResult :=
+  { function := `Sample.errorFn
+  , complexityFormula := "1"
+  , hashable := false
+  , config := {}
+  , points := #[
+      { param := 0, innerRepeats := 0, totalNanos := 0
+      , perCallNanos := 0.0, resultHash := none
+      , status := .error "boom"
+      , partOfVerdict := false } ]
+  , ratios := #[]
+  , verdict := .inconclusive
+  , cMin? := none
+  , cMax? := none
+  , verdictDroppedLeading := 0 }
+
+private def sampleErrorFixedResult : FixedResult :=
+  { function := `Sample.errorFixed
+  , hashable := false
+  , config := { repeats := 1 }
+  , points := #[
+      { repeatIndex := 0, totalNanos := 0
+      , resultHash := none, status := .error "kapow" } ]
+  , medianNanos? := none
+  , minNanos? := none
+  , maxNanos? := none
+  , hashesAgree := true }
+
 /-! ## Round-trip tests -/
 
 def testParametricRoundtrip : IO UInt32 := do
@@ -149,6 +177,50 @@ def testFixedRoundtrip : IO UInt32 := do
       return 1
     return 0
 
+def testErrorPayloadRoundtrip : IO UInt32 := do
+  let json := Export.benchmarkResultToJson sampleErrorResult
+  match Export.benchmarkResultFromJson json with
+  | .error e =>
+    IO.eprintln s!"error-result round-trip parse error: {e}"
+    return 1
+  | .ok r =>
+    match r.points[0]? with
+    | some dp =>
+      match dp.status with
+      | .error msg =>
+        unless msg == "boom" do
+          IO.eprintln s!"expected error payload 'boom', got {msg}"
+          return 1
+      | other =>
+        IO.eprintln s!"expected `.error \"boom\"`, got {repr other}"
+        return 1
+    | none =>
+      IO.eprintln "expected one error point after round-trip"
+      return 1
+    return 0
+
+def testFixedErrorPayloadRoundtrip : IO UInt32 := do
+  let json := Export.fixedResultToJson sampleErrorFixedResult
+  match Export.fixedResultFromJson json with
+  | .error e =>
+    IO.eprintln s!"fixed error-result round-trip parse error: {e}"
+    return 1
+  | .ok r =>
+    match r.points[0]? with
+    | some dp =>
+      match dp.status with
+      | .error msg =>
+        unless msg == "kapow" do
+          IO.eprintln s!"expected fixed error payload 'kapow', got {msg}"
+          return 1
+      | other =>
+        IO.eprintln s!"expected fixed `.error \"kapow\"`, got {repr other}"
+        return 1
+    | none =>
+      IO.eprintln "expected one fixed error point after round-trip"
+      return 1
+    return 0
+
 def testDocumentRoundtrip : IO UInt32 := do
   let json := Export.toJsonWithBaseline #[sampleResultWithEnv] #[sampleFixedResult] (some sampleEnv)
   let jsonStr := json.pretty
@@ -209,6 +281,51 @@ def testVersionAcceptance : IO UInt32 := do
     | .error msg =>
       IO.eprintln s!"should have accepted version 1: {msg}"
       return 1
+
+def testMalformedHashRejected : IO UInt32 := do
+  let badJson :=
+    "{\"export_schema_version\":1,\"results\":[{" ++
+    "\"kind\":\"parametric\",\"function\":\"Sample.linearFn\"," ++
+    "\"complexity_formula\":\"n\",\"hashable\":true," ++
+    "\"config\":{\"max_seconds_per_call\":1.0,\"target_inner_nanos\":500000000," ++
+    "\"param_ceiling\":8,\"param_floor\":0,\"verdict_warmup_fraction\":0.2," ++
+    "\"slope_tolerance\":0.15,\"narrow_range_noise_floor\":1.5," ++
+    "\"signal_floor_multiplier\":10.0,\"cache_mode\":\"warm\"," ++
+    "\"param_schedule\":\"auto\",\"outer_trials\":1}," ++
+    "\"points\":[{\"param\":2,\"per_call_nanos\":25.0,\"total_nanos\":100," ++
+    "\"inner_repeats\":4,\"status\":\"ok\",\"result_hash\":\"0xnothex\"," ++
+    "\"error\":null,\"trial_index\":0,\"part_of_verdict\":true," ++
+    "\"below_signal_floor\":false,\"alloc_bytes\":null,\"peak_rss_kb\":null}]," ++
+    "\"ratios\":[],\"verdict\":\"inconclusive\",\"c_min\":null,\"c_max\":null," ++
+    "\"slope\":null,\"verdict_dropped_leading\":0,\"spawn_floor_nanos\":null," ++
+    "\"advisories\":[],\"trial_summaries\":[],\"budget_truncated\":false," ++
+    "\"env\":null}]}"
+  let path : System.FilePath := "lean-bench-bad-hash.json"
+  IO.FS.writeFile path badJson
+  match ← (Export.loadBaseline path |>.toBaseIO) with
+  | .ok _ =>
+    IO.eprintln "expected malformed result_hash in export to be rejected"
+    return 1
+  | .error e =>
+    let mentionsHash := ((toString e).splitOn "result_hash").length > 1
+    unless mentionsHash do
+      IO.eprintln s!"unexpected malformed-hash error: {e}"
+      return 1
+    return 0
+
+def testMissingResultsRejected : IO UInt32 := do
+  let path : System.FilePath := "lean-bench-missing-results.json"
+  IO.FS.writeFile path "{\"export_schema_version\":1}"
+  match ← (Export.loadBaseline path |>.toBaseIO) with
+  | .ok _ =>
+    IO.eprintln "expected missing results array to be rejected"
+    return 1
+  | .error e =>
+    let mentionsResults := ((toString e).splitOn "results").length > 1
+    unless mentionsResults do
+      IO.eprintln s!"unexpected missing-results error: {e}"
+      return 1
+    return 0
 
 /-! ## Baseline comparison tests -/
 
@@ -337,9 +454,13 @@ def main : IO UInt32 := do
   for (label, t) in
     [ ("parametricRoundtrip",     testParametricRoundtrip),
       ("fixedRoundtrip",          testFixedRoundtrip),
+      ("errorPayloadRoundtrip",   testErrorPayloadRoundtrip),
+      ("fixedErrorPayloadRoundtrip", testFixedErrorPayloadRoundtrip),
       ("documentRoundtrip",       testDocumentRoundtrip),
       ("versionRejection",        testVersionRejection),
       ("versionAcceptance",       testVersionAcceptance),
+      ("malformedHashRejected",   testMalformedHashRejected),
+      ("missingResultsRejected",  testMissingResultsRejected),
       ("baselineRegression",      testBaselineRegression),
       ("baselineImprovement",     testBaselineImprovement),
       ("baselineStable",          testBaselineStable),

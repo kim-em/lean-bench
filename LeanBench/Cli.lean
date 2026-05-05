@@ -109,6 +109,14 @@ def childSub : Cmd := `[Cli|
     "env-json" : String;   "Issue #11: parent's pre-captured env JSON, propagated so all children stamp identical env on their rows. Falls back to fresh capture when absent or malformed."
 ]
 
+def probeFloorSub : Cmd := `[Cli|
+  _probe_floor VIA runProbeFloorCmd; ["0.1.0"]
+  "Internal: harness self-measurement probe. Not intended for direct use."
+
+  FLAGS:
+    "env-json" : String;   "Issue #11: parent's pre-captured env JSON so the probe takes the same fast path as ordinary children."
+]
+
 def compareSub : Cmd := `[Cli|
   compare VIA runCompareCmd; ["0.1.0"]
   "Compare multiple registered benchmarks side-by-side.
@@ -199,7 +207,8 @@ def topCmd : Cmd := `[Cli|
     compareSub;
     verifySub;
     profileSub;
-    childSub
+    childSub;
+    probeFloorSub
 ]
 
 def dispatch (args : List String) : IO UInt32 :=

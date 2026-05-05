@@ -160,18 +160,34 @@ def statusError       : String := "error"
 def statusStrings : Array String :=
   #[statusOk, statusTimedOut, statusKilledAtCap, statusError]
 
-/-- Parse a hex-prefixed UInt64 string like `"0xdeadbeef"`. -/
-def parseHexU64 (s : String) : Option UInt64 := do
-  guard (s.startsWith "0x")
-  let body := s.drop 2
-  let n := body.foldl (init := 0) fun acc c =>
-    let d :=
-      if c.isDigit then c.toNat - '0'.toNat
-      else if 'a'.toNat ≤ c.toNat ∧ c.toNat ≤ 'f'.toNat then c.toNat - 'a'.toNat + 10
-      else if 'A'.toNat ≤ c.toNat ∧ c.toNat ≤ 'F'.toNat then c.toNat - 'A'.toNat + 10
-      else 0
-    acc * 16 + d
-  return n.toUInt64
+/-- Parse a hex-prefixed UInt64 string like `"0xdeadbeef"`.
+
+Rejects malformed input instead of silently coercing it: the body
+must contain 1-16 hex digits and every digit must be in `[0-9a-fA-F]`.
+-/
+def parseHexU64 (s : String) : Except String UInt64 := do
+  unless s.startsWith "0x" || s.startsWith "0X" do
+    .error s!"invalid result_hash `{s}`: expected 0x-prefixed hex"
+  let body := (s.drop 2).toString
+  unless !body.isEmpty do
+    .error s!"invalid result_hash `{s}`: missing hex digits"
+  unless body.length ≤ 16 do
+    .error s!"invalid result_hash `{s}`: more than 16 hex digits"
+  let mut acc : UInt64 := 0
+  for c in body.toList do
+    let d? : Option UInt64 :=
+      if c.isDigit then
+        some (c.toNat - '0'.toNat).toUInt64
+      else if 'a'.toNat ≤ c.toNat ∧ c.toNat ≤ 'f'.toNat then
+        some (c.toNat - 'a'.toNat + 10).toUInt64
+      else if 'A'.toNat ≤ c.toNat ∧ c.toNat ≤ 'F'.toNat then
+        some (c.toNat - 'A'.toNat + 10).toUInt64
+      else
+        none
+    let some d := d?
+      | .error s!"invalid result_hash `{s}`: non-hex digit `{c}`"
+    acc := acc * 16 + d
+  return acc
 
 end Schema
 end LeanBench

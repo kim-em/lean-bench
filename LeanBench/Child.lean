@@ -221,6 +221,16 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
         (cacheMode := cacheMode) (errorMsg? := some msg)
       return (1 : UInt32)
 
+/-- Internal harness-only probe used to measure the parent/child spawn
+    floor without depending on any user benchmark registration. The
+    child decodes or captures the environment exactly like a real child
+    run, then exits immediately without emitting a row. -/
+def runProbeFloorMode (env? : Option Env := none) : IO UInt32 := do
+  let _env ← match env? with
+    | some env => pure env
+    | none     => RunEnv.capture
+  return 0
+
 /-! ## Fixed-benchmark child mode
 
 A fixed-benchmark child runs the registered value once, measures
