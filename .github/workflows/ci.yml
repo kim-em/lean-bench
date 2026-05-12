@@ -94,9 +94,11 @@ jobs:
         run: ./.lake/build/bin/no_usable_data_benchmark_test
 
       # End-to-end smoke tests: `list` exercises the registry +
-      # `initialize` blocks; `verify` spawns each registered benchmark's
-      # child path against `f 0` / `f 1` and is bounded by the spec's
-      # maxSecondsPerCall, so it cannot hang CI.
+      # `initialize` blocks; `verify` invokes each registered
+      # benchmark's runner in-process against `f 0` / `f 1`. There is
+      # no per-call kill on the in-process path — verify-time inputs
+      # are tiny and a hang would indicate a real bench bug; the outer
+      # job timeout backstops.
       - name: fib example list & verify
         shell: bash
         run: |

@@ -135,9 +135,9 @@ avoids type-level branching leaking through the design.
   depend on the compiled binary, which is circular and
   phase-dependent. v0.1 static checks only verify symbol
   existence, arity, and complexity type. Compiled-code sanity
-  checks live in `lean-bench verify`, which spawns the existing
-  child path against `f 0` and `f 1` for each registered
-  benchmark and reports any non-`ok` rows.
+  checks live in `lean-bench verify`, which invokes the
+  registered runner in-process against `f 0` and `f 1` for each
+  registered benchmark and reports any non-`ok` outcome.
 
 - *Strong verdict labels.* The verdict fits the log-log slope β
   of `C` vs `param` over the trimmed tail (leading 20% of ratios

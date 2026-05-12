@@ -10,14 +10,17 @@ Coverage:
    hash is produced for every check.
 2. `verify` against a non-existent name throws a `userError` so the
    CLI can report it cleanly.
-3. End-to-end subprocess failure: `verifyOne` against a spec whose
-   name is not registered in the runtime registry produces a failed
-   report. This exercises the real spawn → child error path → parent
-   classification pipeline, not just the synthetic `VerifyReport`
-   formatting path.
-4. `classifyCheck` distinguishes pass from fail in all four
+3. Registry-miss failure: `verifyOne` against a spec whose name is
+   not registered in the runtime registry produces a failed report.
+   This exercises the in-process lookup → synthetic-DataPoint →
+   classification pipeline that replaces the old child-spawn flow.
+4. Runner-throws failure: a registered runner that deliberately
+   throws an `IO.Error` produces a failed report via the
+   `try/catch` in `verifyOne`. This is the failure mode that
+   replaces the old child-non-zero-exit path.
+5. `classifyCheck` distinguishes pass from fail in all four
    meaningful (status × hashable × hash-present) combinations.
-5. The formatter marks a failing report, lists every failure, and
+6. The formatter marks a failing report, lists every failure, and
    the multi-report summary line counts failures correctly.
 -/
 
@@ -102,12 +105,12 @@ def testHappyPath : IO UInt32 := do
       return 1
   return 0
 
-/-- End-to-end subprocess failure: a spec whose `name` is not in the
-    runtime registry triggers the child's "unregistered benchmark"
-    error path. The spawned child emits an error row and exits 1; the
-    parent classifies the resulting `DataPoint` as a failure. This
-    exercises the full pipeline (spawn, parse/synth, classify) for a
-    deterministic failure without needing a hanging benchmark. -/
+/-- Registry-miss failure: a spec whose `name` is not in the runtime
+    registry triggers the in-process "unregistered benchmark" branch
+    of `verifyOne`. The resulting report has at least one failed
+    check whose message names the missing benchmark. This is the
+    in-process replacement for the previous child-spawn end-to-end
+    failure test. -/
 def testEndToEndFailure : IO UInt32 := do
   let bogusSpec : BenchmarkSpec :=
     { name := Lean.Name.mkSimple "definitely.not.registered"
@@ -122,11 +125,43 @@ def testEndToEndFailure : IO UInt32 := do
   unless report.checks.all (! ·.passed) do
     IO.eprintln s!"expected all checks to fail, got: {Format.fmtVerifyReport report}"
     return 1
-  -- And the surfaced failure reason should mention the child failure,
-  -- not (e.g.) a hash mismatch.
+  -- And the surfaced failure reason should mention the registry
+  -- lookup miss, not (e.g.) a hash mismatch.
   let allMessages := report.checks.toList.filterMap (·.failure)
-  unless allMessages.any (fun msg => stringContains msg "child") do
-    IO.eprintln s!"expected failure messages to mention 'child', got: {allMessages}"
+  unless allMessages.any (fun msg => stringContains msg "unregistered") do
+    IO.eprintln s!"expected failure messages to mention 'unregistered', got: {allMessages}"
+    return 1
+  return 0
+
+/-- Runner-throws failure: a registered runner that throws an
+    `IO.Error` at smoke-input time produces a failed verify report
+    via the `try/catch` in `verifyOne`. This is the in-process
+    replacement for "child exited non-zero". We synthesise the
+    registry entry directly (bypassing `setup_benchmark`) so the
+    failure mode is deterministic regardless of platform or build
+    state. -/
+def testRunnerThrows : IO UInt32 := do
+  let throwingSpec : BenchmarkSpec :=
+    { name := `LeanBench.Test.Verify.throwingFn
+    , complexityFormula := "<dummy>"
+    , hashable := true
+    , config := {} }
+  -- Register a runner whose two-stage closure throws at the inner
+  -- call site. The outer-stage prep is fine; the inner stage is the
+  -- one verifyOne actually executes after `entry.runner param`.
+  LeanBench.register throwingSpec
+    (fun _param => pure (fun _count => throw (IO.userError "deliberate")))
+    (fun _ => 1)
+  let report ← verifyOne throwingSpec
+  if report.passed then
+    IO.eprintln s!"expected verifyOne on a throwing runner to fail, got: {Format.fmtVerifyReport report}"
+    return 1
+  unless report.checks.all (! ·.passed) do
+    IO.eprintln s!"expected all checks to fail, got: {Format.fmtVerifyReport report}"
+    return 1
+  let allMessages := report.checks.toList.filterMap (·.failure)
+  unless allMessages.any (fun msg => stringContains msg "deliberate") do
+    IO.eprintln s!"expected failure messages to mention 'deliberate', got: {allMessages}"
     return 1
   return 0
 
@@ -145,13 +180,13 @@ def testFormatterFailure : IO UInt32 := do
     { spec := hashableSpec
     , checks := #[
         { param := 0
-        , point := mkErrorPoint 0 "child exited with code 1"
-        , failure := some "child error at param=0: child exited with code 1" } ] }
+        , point := mkErrorPoint 0 "runner threw at param=0"
+        , failure := some "runner error at param=0: runner threw at param=0" } ] }
   let line := Format.fmtVerifyReport failingReport
   unless stringContains line "FAIL" do
     IO.eprintln s!"expected FAIL marker, got: {line}"
     return 1
-  unless stringContains line "child error" do
+  unless stringContains line "runner error" do
     IO.eprintln s!"expected failure message, got: {line}"
     return 1
   let summary := Format.fmtCombinedVerify { parametric := #[failingReport], fixed := #[] }
@@ -190,6 +225,7 @@ def runTests : IO UInt32 := do
      ("happyPath", testHappyPath),
      ("unregistered", testUnregistered),
      ("endToEndFailure", testEndToEndFailure),
+     ("runnerThrows", testRunnerThrows),
      ("formatterFailure", testFormatterFailure),
      ("cliQualifiedName", testCliQualifiedName)]
   do
