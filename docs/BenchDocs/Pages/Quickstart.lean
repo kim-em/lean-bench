@@ -63,10 +63,11 @@ registered benchmarks:
   LeanBench.Examples.Fib.badFib    expected complexity: 144 ^ n / 89 ^ n  [fib, exponential]
 ```
 
-`verify` is the fastest sanity-check: it spawns the child path against
-`f 0` and `f 1` for each registered benchmark, exits non-zero if any
-check fails. Each check is bounded by the benchmark's
-`maxSecondsPerCall`.
+`verify` is the fastest sanity-check: it invokes each registered
+benchmark in-process against `f 0` and `f 1`, exits non-zero if any
+check fails. There is no per-call kill on the in-process path —
+verify-time inputs are tiny and a hang or native abort indicates a
+real bug to fix in the bench, not the harness.
 
 ```bench (prog := "../.lake/build/bin/fib_benchmark_example") (argv := "verify")
 verifying 2 benchmark(s)...

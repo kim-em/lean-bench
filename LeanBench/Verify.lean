@@ -1,49 +1,75 @@
 import Lean
 import LeanBench.Core
 import LeanBench.Env
-import LeanBench.Run
 
 /-!
 # `LeanBench.Verify` — registration sanity checks
 
-`lean-bench verify` is a smoke test for registered benchmarks. For
-each benchmark it spawns the same child-process dispatch that `run`
-uses, but at small parameter values (`f 0` and `f 1`) and with a
-tight inner-tuning target. The aim is to surface broken registrations
-(child fails to start, output is unparseable, hashing path crashes,
-function panics at small inputs) before a user invests in a full
-`run`.
+`lean-bench verify` is a smoke gate for registered benchmarks. For
+each benchmark it invokes the registered runner **in-process** at
+small parameter values (`f 0` and `f 1` for parametric specs;
+`count = 1` for fixed specs) and reports any non-`ok` outcome. The
+aim is to surface broken registrations (function panics at small
+inputs, hashing path crashes, missing `Hashable` wiring) before a
+user invests in a full `run`.
 
-Checks performed per benchmark:
+Checks performed per parametric benchmark:
 
-1. The child process starts and emits a row that the parent can parse
-   (covered by `runOneBatch` itself returning a non-error `DataPoint`).
-2. The child reports `status: "ok"` for `param = 0` and `param = 1`.
+1. The registry has an entry for the spec's name. A missing entry
+   means the bench-exe was built without the registration's
+   `setup_benchmark` site, or with a stale registry.
+2. The registered runner returns without throwing an `IO.Error` at
+   `param = 0` and `param = 1`.
 3. If the benchmark's return type has a `Hashable` instance, the
-   child emitted a `result_hash`.
+   runner emits a `result_hash`.
 
-Each check is bounded by the spec's existing `maxSecondsPerCall` cap,
-so a misbehaving benchmark cannot hang `verify` indefinitely.
+## Isolation tradeoffs (read before "fixing" this)
+
+Earlier versions of `verify` spawned a fresh child process for each
+`(spec, param)` pair and reused the full `runOneBatch` pipeline.
+That gave OS-level panic + hang isolation at the cost of `O(specs ×
+params)` process startups; on libraries with dozens of registrations
+the startup cost dominated CI time (~9 s/spawn × 40 spawns for a
+single bench-exe).
+
+The in-process path trades that isolation for one process startup
+per `lake exe X_bench verify`. The tradeoffs are accepted, not
+papered over:
+
+* **Panic isolation.** A Lean-level exception from the runner is
+  caught by the `try ... catch` below and surfaced as a
+  `VerifyCheck.failure`. Native aborts from `@[extern]` C code
+  (e.g. `panic_fn`, C `assert` failures) are **not catchable**
+  and will crash the bench-exe. In practice the verify-time
+  parameters (0, 1) are tiny and rarely exercise extern paths
+  heavily; if one of your benches aborts natively at param=1,
+  fix the bench (it's a real bug) or add a child-spawn fallback
+  for that specific registration.
+* **Hang isolation.** A runner that loops forever blocks the
+  bench-exe until the outer CI step timeout fires. There is no
+  `maxSecondsPerCall` kill on the in-process path. Do **not**
+  wrap calls in `IO.asTask + timer` to pretend otherwise: Lean's
+  async cancellation is cooperative and cannot interrupt a
+  CPU-bound closure; a fake timeout would "return" while leaving
+  a runaway task consuming CPU. If a verify-time hang surfaces,
+  fix the bench — verify inputs are 0 and 1.
+
+The `run` path is untouched and continues to enforce
+process-level isolation and `maxSecondsPerCall` via `runOneBatch`.
 -/
 
 open Lean
 
 namespace LeanBench
 
-/-- Tight inner-tuning target used by `verify`. We only need enough
-    work to amortise child startup and exercise the hashing path; we
-    don't need a stable measurement. 1ms (so `autoTune` doubles until
-    ≥500µs) is well below the default 500ms used by `run`. -/
-private def verifyTargetInnerNanos : Nat := 1_000_000
-
-/-- The params we exercise per benchmark. -/
+/-- The params we exercise per parametric benchmark. -/
 private def verifyParams : Array Nat := #[0, 1]
 
 /-- One check inside a `VerifyReport`. -/
 structure VerifyCheck where
-  /-- The parameter the child was invoked with. -/
+  /-- The parameter the runner was invoked with. -/
   param   : Nat
-  /-- The `DataPoint` the parent observed. -/
+  /-- The `DataPoint` synthesised from the in-process invocation. -/
   point   : DataPoint
   /-- `none` iff the check passed. Otherwise a short human-readable
       description of why it failed. -/
@@ -68,30 +94,64 @@ def classifyCheck (spec : BenchmarkSpec) (param : Nat) (dp : DataPoint) :
   match dp.status with
   | .ok =>
     if spec.hashable && dp.resultHash.isNone then
-      some s!"hashable benchmark but child returned no result_hash at param={param}"
+      some s!"hashable benchmark but runner returned no result_hash at param={param}"
     else
       none
   | .timedOut    => some s!"timed out at param={param}"
   | .killedAtCap => some s!"killed at maxSecondsPerCall cap at param={param}"
-  | .error msg   => some s!"child error at param={param}: {msg}"
+  | .error msg   => some s!"runner error at param={param}: {msg}"
 
-/-- Verify one registered benchmark. -/
+/-- Build a `.ok` DataPoint for an in-process check. Smoke rows are
+    not verdict-eligible. -/
+private def okDataPoint (param : Nat) (loopNanos : Nat)
+    (hash : Option UInt64) : DataPoint :=
+  { param
+  , innerRepeats := 1
+  , totalNanos := loopNanos
+  , perCallNanos := loopNanos.toFloat
+  , resultHash := hash
+  , status := .ok
+  , partOfVerdict := false }
+
+/-- Build a `.error` DataPoint for an in-process check whose runner
+    threw a Lean-level exception. -/
+private def errorDataPoint (param : Nat) (msg : String) : DataPoint :=
+  { param
+  , innerRepeats := 0
+  , totalNanos := 0
+  , perCallNanos := 0.0
+  , resultHash := none
+  , status := .error msg
+  , partOfVerdict := false }
+
+/-- Verify one registered benchmark **in-process**. Looks up the
+    runner in the runtime registry, invokes it once per
+    `verifyParams` entry inside `try ... catch`, and classifies the
+    outcome. A missing registry entry produces a single failed check
+    so the report still flows through `classifyCheck`'s normal path. -/
 def verifyOne (spec : BenchmarkSpec) : IO VerifyReport := do
-  -- Use the spec's own cap so users can opt into more time per call,
-  -- but shrink the inner-tuning target so verify is cheap.
-  let liteCfg := { spec.config with targetInnerNanos := verifyTargetInnerNanos }
-  let liteSpec := { spec with config := liteCfg }
-  let mut checks : Array VerifyCheck := #[]
-  for param in verifyParams do
-    let dp ← runOneBatch liteSpec param
-    let failure := classifyCheck spec param dp
-    checks := checks.push { param, point := dp, failure }
-  return { spec, checks }
+  match ← findRuntimeEntry spec.name with
+  | none =>
+    let msg := s!"unregistered benchmark: {spec.name}"
+    let dp := errorDataPoint 0 msg
+    let failure := classifyCheck spec 0 dp
+    return { spec, checks := #[{ param := 0, point := dp, failure }] }
+  | some entry =>
+    let mut checks : Array VerifyCheck := #[]
+    for param in verifyParams do
+      let dp ← try
+        let inner ← entry.runner param
+        let (loopNanos, hash) ← inner 1
+        pure (okDataPoint param loopNanos hash)
+      catch e =>
+        pure (errorDataPoint param e.toString)
+      let failure := classifyCheck spec param dp
+      checks := checks.push { param, point := dp, failure }
+    return { spec, checks }
 
 /-! ## Fixed-benchmark verification
 
-A single one-shot child invocation per fixed benchmark, with the
-spec's own kill cap but the standard cheap warmup-off shape. Same
+A single in-process invocation per fixed benchmark, count = 1. Same
 classification logic as the parametric path but specialised to
 fixed-benchmark data. -/
 
@@ -115,12 +175,12 @@ def classifyFixedCheck (spec : FixedSpec) (dp : FixedDataPoint) : Option String 
   match dp.status with
   | .ok =>
     if spec.hashable && dp.resultHash.isNone then
-      some "hashable fixed benchmark but child returned no result_hash"
+      some "hashable fixed benchmark but runner returned no result_hash"
     else
-      -- Smoke check only: a single spawn with no warmup, so a pass
-      -- here doesn't guarantee `run` will pass (warmup-sensitive or
-      -- multi-repeat-disagreement cases can still surface there).
-      -- Issue #55.
+      -- Smoke check only: a single in-process call with no warmup,
+      -- so a pass here doesn't guarantee `run` will pass
+      -- (warmup-sensitive or multi-repeat-disagreement cases can
+      -- still surface there). Issue #55.
       if !spec.hashable then none
       else match spec.config.expectedHash, dp.resultHash with
         | some expected, some got =>
@@ -129,14 +189,43 @@ def classifyFixedCheck (spec : FixedSpec) (dp : FixedDataPoint) : Option String 
         | _, _ => none
   | .timedOut    => some "timed out on warmup invocation"
   | .killedAtCap => some "killed at maxSecondsPerCall cap on warmup invocation"
-  | .error msg   => some s!"child error: {msg}"
+  | .error msg   => some s!"runner error: {msg}"
 
-/-- Verify one registered fixed benchmark by spawning a single
-    one-shot child run. The spec's `maxSecondsPerCall` cap applies. -/
+/-- Build a `.ok` FixedDataPoint for an in-process check. -/
+private def okFixedDataPoint (loopNanos : Nat) (hash : Option UInt64) :
+    FixedDataPoint :=
+  { repeatIndex := 0
+  , innerRepeats := 1
+  , totalNanos := loopNanos
+  , resultHash := hash
+  , status := .ok }
+
+/-- Build a `.error` FixedDataPoint for an in-process check whose
+    runner threw. -/
+private def errorFixedDataPoint (msg : String) : FixedDataPoint :=
+  { repeatIndex := 0
+  , innerRepeats := 0
+  , totalNanos := 0
+  , resultHash := none
+  , status := .error msg }
+
+/-- Verify one registered fixed benchmark by invoking its runner
+    in-process with `count = 1`. -/
 def verifyFixedOne (spec : FixedSpec) : IO FixedVerifyReport := do
-  let dp ← runFixedOneBatch spec spec.config 0
-  let failure := classifyFixedCheck spec dp
-  return { spec, checks := #[{ point := dp, failure }] }
+  match ← findFixedRuntimeEntry spec.name with
+  | none =>
+    let msg := s!"unregistered fixed benchmark: {spec.name}"
+    let dp := errorFixedDataPoint msg
+    let failure := classifyFixedCheck spec dp
+    return { spec, checks := #[{ point := dp, failure }] }
+  | some entry =>
+    let dp ← try
+      let (loopNanos, hash) ← entry.runner 1
+      pure (okFixedDataPoint loopNanos hash)
+    catch e =>
+      pure (errorFixedDataPoint e.toString)
+    let failure := classifyFixedCheck spec dp
+    return { spec, checks := #[{ point := dp, failure }] }
 
 /-! ## Combined verify across both registries -/
 

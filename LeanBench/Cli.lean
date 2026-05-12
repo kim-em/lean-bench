@@ -15,7 +15,7 @@ runner). Subcommand layout:
 | `./bench list`                                                  | parent: same |
 | `./bench run NAME [override flags]`                             | parent: run one or more benchmarks, print report |
 | `./bench compare A B C [override flags]`                        | parent: comparison report |
-| `./bench verify [NAMES…]`                                        | parent: bounded `f 0` / `f 1` sanity check via children |
+| `./bench verify [NAMES…]`                                        | parent: in-process `f 0` / `f 1` sanity check (no children spawned) |
 | `./bench profile NAME --profiler "STR" [--param N]`              | parent: re-spawn child wrapped under user's profiler (issue #13) |
 | `./bench _child --bench NAME --param N --target-nanos T`        | child: one inner-tuned batch, print one JSONL row, exit |
 
@@ -191,7 +191,7 @@ users have ETW. The harness side is platform-neutral."
 
 def verifySub : Cmd := `[Cli|
   verify VIA runVerifyCmd; ["0.1.0"]
-  "Sanity-check registered benchmarks (f 0, f 1 via the child path). Verifies all benchmarks if no names or filters are given. Exit code is non-zero on any failure."
+  "Sanity-check registered benchmarks (f 0, f 1 invoked in-process). Verifies all benchmarks if no names or filters are given. Exit code is non-zero on any failure."
 
   FLAGS:
     tag : String;      "Filter by tag (comma-separated for multiple; OR logic). Example: --tag sort,fast"
