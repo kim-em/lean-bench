@@ -20,6 +20,7 @@ defaultTargets = [
   "budget_benchmark_test",
   "no_usable_data_benchmark_test",
   "spawn_floor_benchmark_test",
+  "timed_regions_benchmark_test",
 ]
 
 [[require]]
@@ -170,3 +171,8 @@ root = "LeanBenchTestNoUsableData"
 name = "spawn_floor_benchmark_test"
 srcDir = "test"
 root = "LeanBenchTestSpawnFloor"
+
+[[lean_exe]]
+name = "timed_regions_benchmark_test"
+srcDir = "test"
+root = "LeanBenchTestTimedRegions"
