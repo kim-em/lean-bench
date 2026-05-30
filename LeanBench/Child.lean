@@ -205,18 +205,25 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
       let loop ← entry.runner param
       -- Opt-in timed-regions sidecar emission for downstream
       -- profile-attribution tooling. No-op when the env var is
-      -- unset; full contract in `LeanBench.TimedRegions`.
-      let (loop, sidecar?) ← withSidecarIfEnabled loop
-      let (count, total, hash) ← match cacheMode with
+      -- unset; full contract in `LeanBench.TimedRegions`. The
+      -- `tryFinally` below guarantees the handle is flushed and
+      -- closed even if the timed work throws.
+      let label := match cacheMode with
+        | .warm => "warm-loop"
+        | .cold => "cold-loop"
+      let (loop, sidecar?) ← withSidecarIfEnabled loop label
+      let (count, total, hash) ← try
+        match cacheMode with
         | .warm => autoTune loop targetNanos
         | .cold =>
           -- Single untuned invocation; no warmup probe. The closure's
           -- internal timing still excludes spawn/startup costs.
           let (t, h) ← loop 1
           pure (1, t, h)
-      match sidecar? with
-      | some h => h.flush
-      | none => pure ()
+      finally
+        match sidecar? with
+        | some h => h.flush
+        | none => pure ()
       -- Capture memory after the measured work, before emitting.
       -- Best-effort: capture failures collapse to `none`.
       let mem ← MemStats.capture

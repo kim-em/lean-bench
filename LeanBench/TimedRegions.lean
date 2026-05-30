@@ -1,3 +1,5 @@
+import Lean
+
 /-!
 # `LeanBench.TimedRegions` — opt-in sidecar emission of timed region boundaries
 
@@ -39,17 +41,12 @@ namespace LeanBench
 
 namespace TimedRegions
 
-/-- JSON-escape a string. Conservative — handles every byte we need
-for path strings and label strings. -/
-private def jsonEscape (s : String) : String :=
-  s.foldl (init := "") fun acc c =>
-    match c with
-    | '"' => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | c => acc.push c
+/-- Render a string as a JSON string literal (including the surrounding
+quotes). Delegates to `Lean.Json.str` for full RFC-8259 escaping,
+including all control characters U+0000–U+001F that minimal
+hand-rolled escape tables miss. -/
+private def jsonString (s : String) : String :=
+  (Lean.Json.str s).compress
 
 /-- Render the header record. Written once per child, before any
 region records. `clock_source` is informational for postprocessors;
@@ -68,7 +65,7 @@ private def renderHeader (pid : Nat) (monoAnchorNs : Nat) : String :=
 
 /-- Render one region record. `label` is an opaque tag the caller
 chooses; downstream postprocessors may filter by label (e.g. to
-include only `"warm-loop"` regions and exclude any future
+include only `"timed-loop"` regions and exclude any future
 non-timing regions). -/
 private def renderRegion
     (monoT0Ns monoT1Ns count : Nat) (label : String) : String :=
@@ -77,7 +74,7 @@ private def renderRegion
     s!"\"mono_t0_ns\":{monoT0Ns}",
     s!"\"mono_t1_ns\":{monoT1Ns}",
     s!"\"count\":{count}",
-    s!"\"label\":\"{jsonEscape label}\""
+    s!"\"label\":{jsonString label}"
   ] ++ "}\n"
 
 /-- Open the sidecar file at `path` (truncating any existing
@@ -96,12 +93,15 @@ def openSidecar (path : String) : IO IO.FS.Handle := do
   h.flush
   return h
 
-/-- Append a region record. -/
+/-- Append a region record. No flush — the caller is expected to
+flush once at the end of all emission (typically in a `tryFinally`
+that also closes the handle). Per-record flushing was found to add
+profiler-visible non-region IO between short autotune probes for
+no recovery benefit. -/
 def writeRegion
     (h : IO.FS.Handle) (monoT0Ns monoT1Ns count : Nat) (label : String) :
-    IO Unit := do
+    IO Unit :=
   h.putStr (renderRegion monoT0Ns monoT1Ns count label)
-  h.flush
 
 end TimedRegions
 
@@ -114,10 +114,15 @@ invocation appends a region record to `h`. The wrapper records the
 monotonic-clock boundaries *as close as possible* to the closure
 call — i.e. just inside the wrapper, just outside the original
 closure. The wrapped closure returns whatever the inner closure
-returned. -/
+returned.
+
+Not thread-safe: assumes single-threaded use of the wrapped closure
+(the harness's `runChildMode` autotuner is single-threaded). If the
+helper is ever reused in a context that may call the wrapped loop
+concurrently, callers must serialise around it. -/
 def wrapLoopForSidecar
     (loop : Nat → IO (Nat × Option UInt64)) (h : IO.FS.Handle)
-    (label : String := "warm-loop") :
+    (label : String) :
     Nat → IO (Nat × Option UInt64) := fun n => do
   let t0 ← IO.monoNanosNow
   let result ← loop n
@@ -128,14 +133,14 @@ def wrapLoopForSidecar
 /-- Convenience: read the sidecar path from the environment, open the
 file, wrap `loop`. Returns `(loop, some handle)` if the env var was
 set, `(loop, none)` otherwise. The caller must close the handle when
-emission is done (e.g. by passing it through `tryFinally`). -/
+emission is done by wrapping the call site in `tryFinally`. -/
 def withSidecarIfEnabled
-    (loop : Nat → IO (Nat × Option UInt64)) :
+    (loop : Nat → IO (Nat × Option UInt64)) (label : String) :
     IO ((Nat → IO (Nat × Option UInt64)) × Option IO.FS.Handle) := do
   match ← IO.getEnv timedRegionsEnvVar with
   | none => return (loop, none)
   | some path =>
     let h ← TimedRegions.openSidecar path
-    return (wrapLoopForSidecar loop h, some h)
+    return (wrapLoopForSidecar loop h label, some h)
 
 end LeanBench
