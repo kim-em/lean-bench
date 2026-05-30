@@ -13,6 +13,7 @@ import LeanBench.Verify
 import LeanBench.Format
 import LeanBench.Export
 import LeanBench.Profile
+import LeanBench.TimedRegions
 import LeanBench.Cli
 
 /-!
