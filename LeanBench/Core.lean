@@ -756,6 +756,19 @@ structure FixedBenchmarkConfig where
       copy the printed `observed hash:` value into the `where` clause.
       Issue #55. -/
   expectedHash      : Option UInt64 := none
+  /-- When `true`, the child invokes the registered runner once
+      (`count := 1`) **before** the auto-tuner takes over, and
+      discards the result. Use for benchmarks whose first call
+      lazily initialises module-level state (persistent subprocess
+      drivers, JIT caches, lazy `IO.Ref`s) at significant cost: a
+      single one-shot inner repeat then includes that startup in
+      its timing and the auto-tuner converges to it, producing a
+      per-iteration median that is mostly the startup rather than
+      the steady-state algorithm cost. With this flag the timed
+      region only contains steady-state iterations.
+      Defaults to `false`. The pre-warmup call counts against the
+      `maxSecondsPerCall` cap. -/
+  warmupFirstIter   : Bool := false
   /-- User-defined tags for organizing benchmarks. Same semantics as
       `BenchmarkConfig.tags` — see issue #10. -/
   tags              : Array String := #[]

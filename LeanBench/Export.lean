@@ -178,6 +178,7 @@ def fixedBenchmarkConfigToJson (c : FixedBenchmarkConfig) : Json :=
     ("repeats",              jNat c.repeats),
     ("max_seconds_per_call", jFloat c.maxSecondsPerCall),
     ("warmup",               jBool c.warmup),
+    ("warmup_first_iter",    jBool c.warmupFirstIter),
     ("min_total_seconds",    jFloat c.minTotalSeconds),
     ("expected_hash",        jOptHash c.expectedHash)
   ]
@@ -441,6 +442,10 @@ def fixedBenchmarkConfigFromJson (j : Json) : Except String FixedBenchmarkConfig
     repeats           := ← requireNatField j "repeats"
     maxSecondsPerCall := ← requireFloatField j "max_seconds_per_call"
     warmup            := ← requireBoolField j "warmup"
+    -- `warmup_first_iter` is post-#63; default to today's
+    -- `FixedBenchmarkConfig.warmupFirstIter` default when absent so
+    -- pre-warmupFirstIter baseline files round-trip cleanly.
+    warmupFirstIter   := getBool j "warmup_first_iter" false
     -- `min_total_seconds` arrived in issue #58. Default to today's
     -- `FixedBenchmarkConfig.minTotalSeconds` default when absent so
     -- pre-#58 baseline files round-trip cleanly.

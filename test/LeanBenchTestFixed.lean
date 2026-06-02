@@ -96,6 +96,29 @@ setup_fixed_benchmark autoTuneTarget where {
   warmup := false
   minTotalSeconds := 0.005 }
 
+/-- Shared invocation counter for the `warmupFirstIter` tests.
+    Module-level `IO.Ref` simulating lazy setup state that a
+    persistent-subprocess driver or cached input would occupy. -/
+initialize warmupCounter : IO.Ref Nat ← IO.mkRef 0
+
+/-- Test target that records how many times it has been invoked
+    inside this child process. The return value is the count after
+    the increment, hashed so the `Hashable` path stays exercised. -/
+def warmupCountedTarget : Unit → IO UInt64 := fun () => do
+  warmupCounter.modify (· + 1)
+  return (← warmupCounter.get).toUInt64
+
+setup_fixed_benchmark warmupCountedTarget where {
+  repeats := 1
+  warmup := false
+  warmupFirstIter := true
+  -- Force a single timed inner iteration so the observed hash is
+  -- the count *after* the warmup has run. With autoTune doubling,
+  -- the hash would be the count after iteration 1 of the timed
+  -- batch — still > 1 with warmup — but pinning count=1 makes the
+  -- assertion mechanical.
+  minTotalSeconds := 0.0 }
+
 end LeanBench.Test.Fixed
 
 open LeanBench
@@ -112,6 +135,8 @@ private def cheapPureRegressedName : Lean.Name :=
   `LeanBench.Test.Fixed.cheapPureRegressed
 private def autoTuneTargetName     : Lean.Name :=
   `LeanBench.Test.Fixed.autoTuneTarget
+private def warmupCountedTargetName : Lean.Name :=
+  `LeanBench.Test.Fixed.warmupCountedTarget
 
 /-- Substring helper. -/
 private def stringContains (haystack needle : String) : Bool :=
@@ -539,6 +564,32 @@ def testEvenRepeatsMedian : IO UInt32 := do
     IO.eprintln "expected medianNanos? to be some _"
     return 1
 
+/-- `warmupFirstIter := true` runs one untimed call before the
+    auto-tuner takes over. The target's observed hash on the timed
+    iteration must reflect a counter value > 1: warmup increments
+    once, then the timed inner iteration increments again. Without
+    the flag, the first invocation IS the timed one; the hash would
+    be 1. -/
+def testWarmupFirstIter : IO UInt32 := do
+  let result ← runFixedBenchmark warmupCountedTargetName
+  if result.points.size != 1 then
+    IO.eprintln s!"expected 1 repeat, got {result.points.size}"
+    return 1
+  let dp := result.points[0]!
+  unless dp.status == .ok do
+    IO.eprintln s!"unexpected status: {repr dp.status}"
+    return 1
+  -- minTotalSeconds=0 → autoTuneFixed returns at count=1.
+  unless dp.innerRepeats == 1 do
+    IO.eprintln s!"expected inner_repeats=1, got {dp.innerRepeats}"
+    return 1
+  -- Inside the child: warmup is invocation 1, timed iter is 2.
+  -- Hash returned is the count after the timed iter's increment.
+  unless dp.resultHash == some (Hashable.hash (2 : UInt64)) do
+    IO.eprintln s!"expected hash of 2 (1 warmup + 1 timed); got {dp.resultHash}"
+    return 1
+  return 0
+
 def runTests : IO UInt32 := do
   for (label, t) in
     [("roundtrip", testRoundtrip),
@@ -559,7 +610,8 @@ def runTests : IO UInt32 := do
      ("expectedHashVerify", testExpectedHashVerify),
      ("autoTuneFiresOnFastBody", testAutoTuneFiresOnFastBody),
      ("autoTuneFloorOverrideZero", testAutoTuneFloorOverrideZero),
-     ("autoTuneExpectedHashStillMatches", testAutoTuneExpectedHashStillMatches)]
+     ("autoTuneExpectedHashStillMatches", testAutoTuneExpectedHashStillMatches),
+     ("warmupFirstIter", testWarmupFirstIter)]
   do
     let code ← t
     if code != 0 then
