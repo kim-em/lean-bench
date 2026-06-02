@@ -334,6 +334,15 @@ def runFixedChildMode (benchName : Lean.Name) (repeatIndex : Nat)
     return 1
   | some entry =>
     try
+      -- Optional pre-warmup so module-level lazy state (persistent
+      -- subprocess drivers, cached inputs, JIT) is initialised
+      -- before the auto-tuner takes a timing read. Without this,
+      -- the runner's first iteration absorbs that cost and the
+      -- auto-tuner converges to it, reporting startup time as
+      -- per-iteration time. The discarded result is on the
+      -- benchmark's normal IO path so any error surfaces here.
+      if entry.spec.config.warmupFirstIter then
+        let _ ← entry.runner 1
       let (count, total, hash) ← autoTuneFixed entry.runner minTotalNanos
       let mem ← MemStats.capture
       emitFixedRow benchName repeatIndex count total hash .ok env (mem := mem)
