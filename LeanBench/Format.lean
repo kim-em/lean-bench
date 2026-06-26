@@ -1,8 +1,12 @@
-import LeanBench.Core
-import LeanBench.AutoFit
-import LeanBench.Env
-import LeanBench.RunEnv
-import LeanBench.Verify
+module
+
+public import LeanBench.Core
+public import LeanBench.AutoFit
+public import LeanBench.Env
+public import LeanBench.RunEnv
+public import LeanBench.Verify
+
+public section
 
 /-!
 # `LeanBench.Format` — printers

@@ -1,10 +1,14 @@
-import Lean
-import LeanBench.Core
-import LeanBench.Env
-import LeanBench.MemStats
-import LeanBench.RunEnv
-import LeanBench.Schema
-import LeanBench.TimedRegions
+module
+
+public import Lean
+public import LeanBench.Core
+public import LeanBench.Env
+public import LeanBench.MemStats
+public import LeanBench.RunEnv
+public import LeanBench.Schema
+public import LeanBench.TimedRegions
+
+public section
 
 /-!
 # `LeanBench.Child` — child-mode runner

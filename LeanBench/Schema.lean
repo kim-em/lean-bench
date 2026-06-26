@@ -1,5 +1,9 @@
-import Lean.Data.Json
-import LeanBench.Core
+module
+
+public import Lean.Data.Json
+public import LeanBench.Core
+
+public section
 
 /-!
 # `LeanBench.Schema` — versioned result schema

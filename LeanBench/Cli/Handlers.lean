@@ -1,15 +1,19 @@
-import Cli
-import Lean.Data.Json
-import LeanBench.Core
-import LeanBench.Env
-import LeanBench.Run
-import LeanBench.Child
-import LeanBench.Compare
-import LeanBench.Verify
-import LeanBench.Format
-import LeanBench.Export
-import LeanBench.Profile
-import LeanBench.Cli.Parse
+module
+
+public import Cli
+public import Lean.Data.Json
+public import LeanBench.Core
+public import LeanBench.Env
+public import LeanBench.Run
+public import LeanBench.Child
+public import LeanBench.Compare
+public import LeanBench.Verify
+public import LeanBench.Format
+public import LeanBench.Export
+public import LeanBench.Profile
+public import LeanBench.Cli.Parse
+
+public section
 
 /-!
 # `LeanBench.Cli.Handlers` — subcommand handler implementations

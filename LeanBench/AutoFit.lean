@@ -1,4 +1,8 @@
-import LeanBench.Core
+module
+
+public import LeanBench.Core
+
+public section
 
 /-!
 # `LeanBench.AutoFit` — heuristic complexity model selection (issue #8)
