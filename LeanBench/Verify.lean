@@ -1,6 +1,10 @@
-import Lean
-import LeanBench.Core
-import LeanBench.Env
+module
+
+public import Lean
+public import LeanBench.Core
+public import LeanBench.Env
+
+public section
 
 /-!
 # `LeanBench.Verify` — registration sanity checks

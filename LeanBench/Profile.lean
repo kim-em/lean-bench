@@ -1,6 +1,10 @@
-import Lean
-import LeanBench.Core
-import LeanBench.Run
+module
+
+public import Lean
+public import LeanBench.Core
+public import LeanBench.Run
+
+public section
 
 /-!
 # `LeanBench.Profile` — wrap a single child invocation under an external profiler

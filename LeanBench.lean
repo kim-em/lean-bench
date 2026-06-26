@@ -1,20 +1,24 @@
-import LeanBench.Core
-import LeanBench.Schema
-import LeanBench.Env
-import LeanBench.MemStats
-import LeanBench.RunEnv
-import LeanBench.Setup
-import LeanBench.Child
-import LeanBench.Run
-import LeanBench.Stats
-import LeanBench.AutoFit
-import LeanBench.Compare
-import LeanBench.Verify
-import LeanBench.Format
-import LeanBench.Export
-import LeanBench.Profile
-import LeanBench.TimedRegions
-import LeanBench.Cli
+module
+
+public import LeanBench.Core
+public import LeanBench.Schema
+public import LeanBench.Env
+public import LeanBench.MemStats
+public import LeanBench.RunEnv
+public import LeanBench.Setup
+public import LeanBench.Child
+public import LeanBench.Run
+public import LeanBench.Stats
+public import LeanBench.AutoFit
+public import LeanBench.Compare
+public import LeanBench.Verify
+public import LeanBench.Format
+public import LeanBench.Export
+public import LeanBench.Profile
+public import LeanBench.TimedRegions
+public import LeanBench.Cli
+
+public section
 
 /-!
 # `LeanBench` — microbenchmarks for Lean 4

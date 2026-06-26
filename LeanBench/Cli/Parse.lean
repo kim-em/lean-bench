@@ -1,7 +1,11 @@
-import Cli
-import Lean.Data.Json
-import LeanBench.Core
-import LeanBench.Env
+module
+
+public import Cli
+public import Lean.Data.Json
+public import LeanBench.Core
+public import LeanBench.Env
+
+public section
 
 /-!
 # `LeanBench.Cli.Parse` — flag parsers, override builders, filtering

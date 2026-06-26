@@ -1,3 +1,7 @@
+module
+
+public section
+
 /-!
 # `LeanBench.MemStats` — memory metrics capture (issue #6)
 

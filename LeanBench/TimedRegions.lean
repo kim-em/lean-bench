@@ -1,4 +1,8 @@
-import Lean
+module
+
+public import Lean
+
+public section
 
 /-!
 # `LeanBench.TimedRegions` — opt-in sidecar emission of timed region boundaries

@@ -1,9 +1,13 @@
-import Lean
-import LeanBench.Core
-import LeanBench.Env
-import LeanBench.RunEnv
-import LeanBench.Schema
-import LeanBench.Format
+module
+
+public import Lean
+public import LeanBench.Core
+public import LeanBench.Env
+public import LeanBench.RunEnv
+public import LeanBench.Schema
+public import LeanBench.Format
+
+public section
 
 /-!
 # `LeanBench.Export` -- machine-readable export and baseline comparison

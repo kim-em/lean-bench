@@ -1,7 +1,11 @@
-import LeanBench.Core
-import LeanBench.Env
-import LeanBench.Run
-import LeanBench.Format
+module
+
+public import LeanBench.Core
+public import LeanBench.Env
+public import LeanBench.Run
+public import LeanBench.Format
+
+public section
 
 /-!
 # `LeanBench.Compare` — cross-implementation comparison

@@ -1,5 +1,9 @@
-import Lean
-import LeanBench.Core
+module
+
+public import Lean
+public import LeanBench.Core
+
+public section
 
 /-!
 # `LeanBench.Stats` — ratios + verdict

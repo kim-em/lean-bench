@@ -1,5 +1,9 @@
-import Lean.Data.Name
-import Std.Data.HashSet
+module
+
+public import Lean.Data.Name
+public import Std.Data.HashSet
+
+public section
 
 /-!
 # `LeanBench.Core` — shared types

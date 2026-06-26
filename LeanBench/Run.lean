@@ -1,10 +1,14 @@
-import Lean
-import Std.Sync.Mutex
-import LeanBench.Core
-import LeanBench.Env
-import LeanBench.RunEnv
-import LeanBench.Schema
-import LeanBench.Stats
+module
+
+public import Lean
+public import Std.Sync.Mutex
+public import LeanBench.Core
+public import LeanBench.Env
+public import LeanBench.RunEnv
+public import LeanBench.Schema
+public import LeanBench.Stats
+
+public section
 
 /-!
 # `LeanBench.Run` — parent-side orchestration

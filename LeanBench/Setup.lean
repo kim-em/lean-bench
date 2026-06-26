@@ -1,6 +1,10 @@
-import Lean
-import LeanBench.Core
-import LeanBench.Env
+module
+
+public import Lean
+public import LeanBench.Core
+public import LeanBench.Env
+
+public section
 
 /-!
 # `LeanBench.Setup` — the `setup_benchmark` command
@@ -85,7 +89,7 @@ syntax (name := setupBenchmark) "setup_benchmark "
                           (setupBenchmarkWhere)? : command
 
 /-- Look up the type of a constant; return `(argTy, resTy)`. -/
-def expectFunction (env : Environment) (declName : Name) :
+meta def expectFunction (env : Environment) (declName : Name) :
     CommandElabM (Expr × Expr) := do
   let some ci := env.find? declName
     | throwError "setup_benchmark: function `{declName}` is not defined"
@@ -96,7 +100,7 @@ def expectFunction (env : Environment) (declName : Name) :
   return (argTy, resTy)
 
 /-- Look up the type of a constant; assert it is `Nat → α` and return `α`. -/
-def expectNatToAlpha (env : Environment) (declName : Name) :
+meta def expectNatToAlpha (env : Environment) (declName : Name) :
     CommandElabM Expr := do
   let (argTy, resTy) ← expectFunction env declName
   unless argTy.isConstOf ``Nat do
@@ -104,7 +108,7 @@ def expectNatToAlpha (env : Environment) (declName : Name) :
   return resTy
 
 /-- True iff `Hashable α` synthesizes. -/
-def hasHashable (alphaExpr : Expr) : CommandElabM Bool := do
+meta def hasHashable (alphaExpr : Expr) : CommandElabM Bool := do
   liftTermElabM do
     let goal ← Meta.mkAppM ``Hashable #[alphaExpr]
     match ← (Meta.synthInstance? goal) with
@@ -115,7 +119,7 @@ def hasHashable (alphaExpr : Expr) : CommandElabM Bool := do
 namespace, falling back to the bare name. Returns the candidate even
 on failure so the eventual error message names the user-visible
 qualified form rather than the bare identifier. -/
-def resolveDecl (env : Environment) (ns : Name) (id : Ident) : Name :=
+meta def resolveDecl (env : Environment) (ns : Name) (id : Ident) : Name :=
   let bare := id.getId
   let candidate := ns ++ bare
   if env.contains candidate then candidate
@@ -123,7 +127,7 @@ def resolveDecl (env : Environment) (ns : Name) (id : Ident) : Name :=
   else candidate
 
 @[command_elab setupBenchmark]
-def elabSetupBenchmark : CommandElab := fun stx => do
+meta def elabSetupBenchmark : CommandElab := fun stx => do
   match stx with
   | `(command| setup_benchmark $fnId:ident $argId:ident => $complexityTerm) =>
     elabCore fnId argId complexityTerm none none
@@ -318,7 +322,7 @@ arrows are rejected (issue #54).
 The IO check uses `isDefEq` against `IO ?α` rather than syntactic
 head matching, so `EIO IO.Error α`, `BaseIO α`, and reducible
 aliases of `IO` are all accepted. -/
-def expectFixedValue (env : Environment) (declName : Name) :
+meta def expectFixedValue (env : Environment) (declName : Name) :
     CommandElabM (Expr × FixedShape) := do
   let some ci := env.find? declName
     | throwError "setup_fixed_benchmark: name `{declName}` is not defined"
@@ -359,7 +363,7 @@ syntax (name := setupFixedBenchmark) "setup_fixed_benchmark "
   ident (setupBenchmarkWhere)? : command
 
 @[command_elab setupFixedBenchmark]
-def elabSetupFixedBenchmark : CommandElab := fun stx => do
+meta def elabSetupFixedBenchmark : CommandElab := fun stx => do
   match stx with
   | `(command| setup_fixed_benchmark $fnId:ident) =>
     elabCore fnId none

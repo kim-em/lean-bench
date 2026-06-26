@@ -1,6 +1,10 @@
-import Cli
-import LeanBench.Cli.Parse
-import LeanBench.Cli.Handlers
+module
+
+public import Cli
+public import LeanBench.Cli.Parse
+public import LeanBench.Cli.Handlers
+
+public section
 
 /-!
 # `LeanBench.Cli` — Cmd tree and `dispatch`

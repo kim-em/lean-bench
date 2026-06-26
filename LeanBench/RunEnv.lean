@@ -1,6 +1,10 @@
-import Lean
-import Std.Time
-import LeanBench.Core
+module
+
+public import Lean
+public import Std.Time
+public import LeanBench.Core
+
+public section
 
 /-!
 # `LeanBench.RunEnv` — capture reproducibility metadata (issue #11)
