@@ -30,6 +30,7 @@ rev = "main"
 
 [[lean_lib]]
 name = "LeanBench"
+precompileModules = true
 
 # --- examples ---
 # Lib and exe names are deliberately verbose so they don't collide
