@@ -214,10 +214,11 @@ def capture : IO Env := do
   let gitDirty ← detectGitDirty
   let ts ← Std.Time.Timestamp.now
   let unixMs : Int := (ts.toMillisecondsSinceUnixEpoch.val : Int)
-  -- The `addSeconds 0` call is a no-op; the constructor just gives
-  -- us a `PlainDateTime` in UTC without the local-zone lookup that
-  -- `PlainDateTime.now` does. We want UTC for the ISO timestamp.
-  let dt := Std.Time.PlainDateTime.ofTimestampAssumingUTC ts
+  -- Build a `PlainDateTime` in UTC from the timestamp without the
+  -- local-zone lookup that `PlainDateTime.now` does. We want UTC for
+  -- the ISO timestamp. (`PlainDateTime.ofTimestampAssumingUTC` was
+  -- removed in Lean v4.32; go via a UTC `DateTime`.)
+  let dt := (Std.Time.DateTime.ofTimestampWithZone ts Std.Time.TimeZone.UTC).toPlainDateTime
   let iso := fmtIso8601 dt
   return {
     leanVersion       := Lean.versionString
