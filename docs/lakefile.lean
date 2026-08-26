@@ -12,9 +12,9 @@ package docs where
   ]
 
 require verso from git
-  "https://github.com/leanprover/verso.git" @ "v4.30.0-rc2"
+  "https://github.com/leanprover/verso.git" @ "v4.33.0"
 require versowebcomponents from git
-  "https://github.com/leanprover/verso-web-components.git" @ "v4.30.0-rc2"
+  "https://github.com/leanprover/verso-web-components.git" @ "v4.33.0"
 require leanBench from ".."
 
 @[default_target]
