@@ -26,7 +26,10 @@ defaultTargets = [
 [[require]]
 name = "Cli"
 git = "https://github.com/mhuisi/lean4-cli.git"
-rev = "main"
+# Pinned to a release tag rather than `main`: lean4-cli's `main` tracks the
+# newest release candidate, and `lake update` adopts a dependency's toolchain,
+# which silently drags this package onto an rc.
+rev = "v4.33.0"
 
 [[lean_lib]]
 name = "LeanBench"
