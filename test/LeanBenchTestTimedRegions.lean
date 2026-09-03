@@ -14,6 +14,7 @@ the runner's autotuned `loop` closure. We assert:
    well-formed header and ≥ 1 region records.
 3. Region records carry monotonic boundaries that fall inside the
    wallclock window of the child invocation.
+4. A `%p` token in the configured path is replaced by the child PID.
 -/
 
 open LeanBench
@@ -145,7 +146,21 @@ def testEnvVarSetWritesSidecar : IO UInt32 := do
   try IO.FS.removeFile path catch _ => pure ()
   return 0
 
-/-- (3) env var set to an unwritable path → child exits non-zero
+/-- (3) `%p` expands to the child PID, preventing concurrently or
+sequentially spawned children from truncating the same sidecar. -/
+def testPidPathTemplate : IO UInt32 := do
+  let pid := (← IO.Process.getPID).toNat
+  let resolved := LeanBench.TimedRegions.resolvePath
+    "/tmp/sidecar-%p-%p.jsonl" pid
+  let expected := s!"/tmp/sidecar-{pid}-{pid}.jsonl"
+  unless resolved == expected do
+    throw (.userError s!"PID path template resolved to {resolved}, expected {expected}")
+  unless LeanBench.TimedRegions.resolvePath "plain.jsonl" 42 == "plain.jsonl" do
+    throw (.userError "a path without %p changed during resolution")
+  IO.println s!"PID path template expands: {resolved} ✓"
+  return 0
+
+/-- (4) env var set to an unwritable path → child exits non-zero
 with a sensible error row. We can't easily synthesise an
 unwritable path inside `/tmp`; use a path under a nonexistent
 parent directory, which fails the open with a clear error. -/
@@ -172,8 +187,9 @@ private def runTest (name : String) (run : IO UInt32) : IO UInt32 := do
 private def runTests : IO UInt32 := do
   let c1 ← runTest "envVarUnsetNoFile" testEnvVarUnsetNoFile
   let c2 ← runTest "envVarSetWritesSidecar" testEnvVarSetWritesSidecar
-  let c3 ← runTest "envVarSetUnwritableFails" testEnvVarSetUnwritableFails
-  if c1 = 0 ∧ c2 = 0 ∧ c3 = 0 then
+  let c3 ← runTest "pidPathTemplate" testPidPathTemplate
+  let c4 ← runTest "envVarSetUnwritableFails" testEnvVarSetUnwritableFails
+  if c1 = 0 ∧ c2 = 0 ∧ c3 = 0 ∧ c4 = 0 then
     IO.println "timed-regions tests passed"
     return 0
   else
