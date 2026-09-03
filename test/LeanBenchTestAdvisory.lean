@@ -274,20 +274,24 @@ setup_benchmark littleFnCustom n => n where {
   targetInnerNanos := 50_000_000
   signalFloorMultiplier := 1.0
   paramSchedule := .custom #[3, 5, 7, 11]
+  outerTrials := 3
 }
 
 end LeanBench.Test.Advisory
 
 private def customName : Lean.Name := `LeanBench.Test.Advisory.littleFnCustom
 
-/-- A `.custom` ladder runs exactly the user-supplied params, in
-    order, with no doubling probe and no auto-bracketing. -/
+/-- A `.custom` ladder runs exactly the user-supplied params in each
+    outer-trial round, with no doubling probe and no auto-bracketing. -/
 def testCustomLadder : IO UInt32 := do
   let result ← runBenchmark customName
   let observed := result.points.map (·.param)
-  -- All-ok prefix — the params are tiny, nothing should hit the cap.
-  -- The ladder is exactly the declared list.
-  expectEq "custom.params" observed #[3, 5, 7, 11]
+  -- The params are tiny, so every round should complete. Trial-major order
+  -- interleaves rungs instead of clustering all measurements of one param.
+  expectEq "custom.params" observed
+    #[3, 5, 7, 11, 3, 5, 7, 11, 3, 5, 7, 11]
+  expectEq "custom.trialIndices" (result.points.map (·.trialIndex))
+    #[0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
   return 0
 
 /-- Capture stderr of `act` into a string, restoring the previous

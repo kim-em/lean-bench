@@ -198,6 +198,13 @@ share the same `param`, but otherwise the harness does nothing to
 correlate them: each gets a fresh process with its own caches,
 allocator state, and OS scheduling.
 
+For an explicit `.custom` schedule, trials run in deterministic
+trial-major order: the harness walks every declared parameter once,
+then begins the next outer-trial round. This prevents a temporary host-load
+or thermal episode from being aliased to one rung by a cluster of consecutive
+measurements. Automatic doubling and linear schedules retain their probing
+and top-up order because later rungs depend on earlier outcomes.
+
 What you see in the report when `outerTrials > 1`:
 
 - The main table shows every per-trial row, tagged with
