@@ -93,6 +93,12 @@ jobs:
         shell: bash
         run: ./.lake/build/bin/no_usable_data_benchmark_test
 
+      - name: custom scheduling and outer-trial tests
+        shell: bash
+        run: |
+          ./.lake/build/bin/advisory_benchmark_test
+          ./.lake/build/bin/outer_trials_benchmark_test
+
       # End-to-end smoke tests: `list` exercises the registry +
       # `initialize` blocks; `verify` invokes each registered
       # benchmark's runner in-process against `f 0` / `f 1`. There is

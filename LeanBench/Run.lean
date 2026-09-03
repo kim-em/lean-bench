@@ -367,6 +367,30 @@ private def runRungTrials (spec : BenchmarkSpec) (param : Nat)
     acc := acc.push { dp with trialIndex := i }
   return acc
 
+/-- Run an explicit custom schedule in trial-major order.
+
+Custom schedules are scientific declarations rather than probes, so every
+declared parameter is attempted in every outer-trial round. Interleaving the
+rungs prevents a temporary host-load or thermal episode from being aliased to
+one parameter merely because all of that rung's trials ran consecutively.
+Each child remains an independent spawn and retains its per-parameter
+`trialIndex`; only scheduling order changes. -/
+private def runCustomTrials (spec : BenchmarkSpec) (params : Array Nat)
+    (trials : Nat) (env : Env)
+    (deadline? : Option BudgetDeadline := none) :
+    IO (Array DataPoint × Bool) := do
+  let mut acc : Array DataPoint := #[]
+  let mut truncated := false
+  for i in [0 : max 1 trials] do
+    for param in params do
+      if (← deadlineExceeded? deadline?) then
+        truncated := true
+        break
+      let dp ← runOneBatch spec param (some env)
+      acc := acc.push { dp with trialIndex := i }
+    if truncated then break
+  return (acc, truncated)
+
 /-- Did any trial at this rung succeed? Drives the ladder-continuation
     decision: the rung counts as `ok` for `lastOk` / sweep-progress as
     long as at least one of its `outerTrials` measurements landed.
@@ -586,16 +610,10 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
   let mut budgetTruncated := false
   match schedule with
   | .custom params =>
-    for n in params do
-      if (← deadlineExceeded? deadline?) then
-        budgetTruncated := true
-        break
-      let rung ← runRungTrials spec n cfg.outerTrials (some env)
-      points := points ++ rung
-      -- Stop the ladder only when EVERY trial at this rung failed.
-      -- A transient first-trial timeout doesn't poison the rest of
-      -- the schedule.
-      unless rungAnyOk rung do break
+    let (customPoints, cut) ←
+      runCustomTrials spec params cfg.outerTrials env deadline?
+    points := customPoints
+    if cut then budgetTruncated := true
   | _ =>
     let (probePoints, lastOk?, firstFail?, probeBudgetCut) ←
       runDoublingProbe spec env deadline?
