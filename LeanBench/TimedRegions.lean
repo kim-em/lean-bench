@@ -17,7 +17,10 @@ harness to tell it where those regions sit on the monotonic clock.
 
 This module is profiler-agnostic: it just writes one JSONL record
 per timed loop invocation to a sidecar file when the environment
-variable `LEAN_BENCH_TIMED_REGIONS_SIDECAR` is set. Downstream
+variable `LEAN_BENCH_TIMED_REGIONS_SIDECAR` is set. A `%p` token in
+the variable's value is replaced with the child PID, so a parent that
+spawns several benchmark children can give each one a distinct file.
+Downstream
 tooling (an external postprocessor) consumes the sidecar plus the
 profiler's own recording.
 
@@ -44,6 +47,12 @@ Design choices:
 namespace LeanBench
 
 namespace TimedRegions
+
+/-- Resolve the optional process-id token in a sidecar path template.
+Replacing every `%p` matches common profiler path-template conventions
+and makes one parent-provided environment value safe for many children. -/
+def resolvePath (template : String) (pid : Nat) : String :=
+  template.replace "%p" (toString pid)
 
 /-- Render a string as a JSON string literal (including the surrounding
 quotes). Delegates to `Lean.Json.str` for full RFC-8259 escaping,
@@ -92,7 +101,7 @@ plumbing might surprise us), each child starts a clean record. -/
 def openSidecar (path : String) : IO IO.FS.Handle := do
   let pid ← IO.Process.getPID
   let anchor ← IO.monoNanosNow
-  let h ← IO.FS.Handle.mk path .write
+  let h ← IO.FS.Handle.mk (resolvePath path pid.toNat) .write
   h.putStr (renderHeader pid.toNat anchor)
   h.flush
   return h
