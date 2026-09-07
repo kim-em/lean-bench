@@ -30,6 +30,22 @@ first.
 
 # How profile works
 
+Both `setup_benchmark` and `setup_fixed_benchmark` generate operation-only
+profiling companions. Prep and result consumption lie outside each `kernel`
+region; full `Hashable` results are hashed afterward. Non-Hashable results use
+the ordinary `sizeOf` fallback, which may be constant for some types. A boxed
+IO call and clock overhead remain inside the region. Manually registered
+benchmarks must also call `registerKernel`; no silent whole-loop fallback is
+used.
+
+Rows carry `profile_kernel:true` and must not be imported as scientific
+baselines. Warm autotuning uses whole-batch wall time, while reported durations
+sum operation regions. Fixed captures use the declared `minTotalSeconds`
+(`0` selects one call); the explicit CLI overrides still apply. Sidecar output
+is limited to 100000 regions per child and flushed on exceptions. For useful
+sampling, choose inputs whose operations last long enough to collect samples.
+If the limit is reached, increase the input or shorten the capture.
+
 ```
 $ lake exe bench profile NAME --profiler "PROFILER ARGS --" [--param N]
 ```

@@ -101,21 +101,29 @@ See the [deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) a
 [the Profiling page](https://kim-em.github.io/lean-bench/Profiling/).
 
 `profile` supports both parametric and fixed registrations. It uses a separate
-operation-only runner: each complete result is hashed and consumed after the
-operation's end timestamp. Ordinary `run`, `compare`, and `verify` retain their
+operation-only runner: each `Hashable` result is hashed after the operation's
+end timestamp. Other types use the ordinary `sizeOf` fallback, which can be
+constant. Ordinary `run`, `compare`, and `verify` retain their
 existing operation-plus-hash loops and timings. Profiling rows carry
 `"profile_kernel":true` and are not scientific benchmark measurements.
-Fixed profiles use `--target-inner-nanos` to size the capture, and honor
-`warmupFirstIter` before collecting regions.
+Fixed profiles use their declared `minTotalSeconds` (zero selects one call),
+allow a `--target-inner-nanos` override, and honor `warmupFirstIter` before
+collecting regions. Warm tuning uses whole-batch wall time, while reported
+durations sum kernel regions. Scientific parsers reject profiling-only rows;
+ordinary parent spawns remove an ambient profiling flag.
 
 For timed-region filtering, set `LEAN_BENCH_TIMED_REGIONS_SIDECAR` to a JSONL
 path (optionally containing `%p`) and retain regions labelled `kernel`.
 External orchestrators that invoke `_child` directly also set
 `LEAN_BENCH_PROFILE_KERNEL=1`; without it, the existing whole-loop sidecar
-labels and behavior are unchanged. Kernel profiles emit one region per call,
+labels and behavior are unchanged. Manual `register` users must also supply a
+`registerKernel` companion. Kernel profiles emit one region per call, capped at
+100000 per child (an explicit error, not silent truncation),
 so choose a representative operation long enough for sampling, not a tiny
 accessor whose clock/dispatch overhead exceeds its work. Result destruction,
 hashing, preparation, sidecar writes, and autotuner gaps are outside regions.
+Clock reads and boxed IO dispatch overhead remain inside. Sidecars are flushed
+on exceptions as well as successful completion.
 
 ## Fixed-problem benchmarks
 

@@ -213,6 +213,14 @@ def testFixedProfiles : IO UInt32 := do
         "--target-inner-nanos", "1000000"] }
     unless proc.exitCode == 0 && (proc.stdout.splitOn "\"status\":\"ok\"").length > 1 do
       throw (IO.userError s!"fixed profile failed: {name}: {proc.stdout} {proc.stderr}")
+    let .ok row := Lean.Json.parse proc.stdout.trimAscii.toString
+      | throw (IO.userError "invalid fixed profile JSON")
+    unless (row.getObjValAs? String "kind").toOption == some "fixed" &&
+        (row.getObjValAs? Nat "repeat_index").toOption == some 0 &&
+        (row.getObjValAs? Bool "profile_kernel").toOption == some true do
+      throw (IO.userError "fixed profile lost its kind or profiling marker")
+    if (parseFixedChildRow proc.stdout.trimAscii.toString).isOk then
+      throw (IO.userError "scientific parser accepted a kernel-only fixed row")
   IO.println "  ok  fixed profiling for all callable shapes"
   return 0
 
@@ -233,11 +241,38 @@ def testKernelRegions : IO UInt32 := IO.FS.withTempFile fun handle path => do
     throw (IO.userError "kernel region label missing")
   unless (proc.stdout.splitOn "\"profile_kernel\":true").length == 2 do
     throw (IO.userError "kernel profile row must be explicitly labelled")
-  let .ok row := parseChildRow proc.stdout.trimAscii.toString
+  let .ok row := Lean.Json.parse proc.stdout.trimAscii.toString
     | throw (IO.userError "invalid kernel profile row")
-  unless row.resultHash == some (hash (LeanBench.Test.Profile.tinyFn 5)) do
+  let .ok digest := row.getObjValAs? String "result_hash" >>= Schema.parseHexU64
+    | throw (IO.userError "missing kernel result hash")
+  unless digest == hash (LeanBench.Test.Profile.tinyFn 5) do
     throw (IO.userError "kernel profiling changed the operation result")
+  if (parseChildRow proc.stdout.trimAscii.toString).isOk then
+    throw (IO.userError "scientific parser accepted a kernel-only parametric row")
   IO.println "  ok  kernel regions and result agreement"
+  return 0
+
+def testKernelException : IO UInt32 := IO.FS.withTempFile fun handle path => do
+  handle.flush
+  let proc ← IO.Process.output {
+    cmd := (← LeanBench.ownExe)
+    args := #["_test_kernel_exception"]
+    env := #[("LEAN_BENCH_TIMED_REGIONS_SIDECAR", some path.toString)] }
+  unless proc.exitCode == 0 do throw (IO.userError proc.stderr)
+  let lines := (← IO.FS.readFile path).splitOn "\n" |>.filter (! ·.isEmpty)
+  unless lines.length == 2 do
+    throw (IO.userError "completed kernel region was not flushed on exception")
+  IO.println "  ok  kernel exception flushing"
+  return 0
+
+def testAmbientIsolation : IO UInt32 := do
+  if System.Platform.isWindows then return 0
+  let proc ← IO.Process.output {
+    cmd := (← LeanBench.ownExe)
+    args := #["_test_ambient"]
+    env := #[("LEAN_BENCH_PROFILE_KERNEL", some "1")] }
+  unless proc.exitCode == 0 do throw (IO.userError s!"{proc.stdout} {proc.stderr}")
+  IO.println "  ok  ordinary spawn removes ambient kernel profiling"
   return 0
 
 def runTests : IO UInt32 := do
@@ -249,7 +284,9 @@ def runTests : IO UInt32 := do
       testProfileSmokeViaEnv,
       testKernelLoop,
       testFixedProfiles,
-      testKernelRegions ]
+      testKernelRegions,
+      testKernelException,
+      testAmbientIsolation ]
   do
     let code ← t
     if code != 0 then anyFail := 1
@@ -262,6 +299,22 @@ def runTests : IO UInt32 := do
     the profile path). The `_child` first arg distinguishes them. -/
 def main (args : List String) : IO UInt32 :=
   match args with
+  | "_test_kernel_exception" :: _ => do
+    let calls ← IO.mkRef (0 : Nat)
+    let loop ← kernelLoop (fun () => do
+      calls.modify (· + 1)
+      if (← calls.get) == 2 then throw (IO.userError "intentional")
+      pure (17 : UInt64)) id true
+    try
+      let _ ← loop 3
+      return 1
+    catch _ => return 0
+  | "_test_ambient" :: _ => do
+    let (code, out, err, killed) ← spawnWithCap (← LeanBench.ownExe)
+      #["_child", "--bench", tinyName.toString, "--param", "5", "--cache-mode", "cold"] 5000
+    unless code == 0 && !killed && (parseChildRow out.trimAscii.toString).isOk do
+      throw (IO.userError s!"ambient flag contaminated scientific row: {out} {err}")
+    return 0
   | "_child" :: _ => LeanBench.Cli.dispatch args
   | "_probe_floor" :: _ => LeanBench.Cli.dispatch args
   | "profile" :: _ => LeanBench.Cli.dispatch args

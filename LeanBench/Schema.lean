@@ -74,6 +74,11 @@ def optionalCommonKeys : Array String :=
 def optionalParametricKeys : Array String :=
   #["per_call_nanos", "cache_mode"]
 
+/-- Additional optional keys on profiling-only rows, never scientific rows.
+`profile_kernel = true` changes the timing boundary to exclude consumption;
+scientific parsers must reject these rows, not import them as baselines. -/
+def optionalProfileKeys : Array String := #["profile_kernel"]
+
 /-! ## Environment-metadata sub-keys
 
 The `env` value is itself a JSON object. `envKeys` pins the keys

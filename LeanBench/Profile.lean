@@ -120,7 +120,9 @@ def runProfile (name : Lean.Name) (param : Nat) (profilerCmd : String)
           name := entry.spec.name
           complexityFormula := "fixed profile"
           hashable := entry.spec.hashable
-          config := { targetInnerNanos := 1000000000 } }
+          config := {
+            targetInnerNanos := max 1 (entry.spec.config.minTotalSeconds * 1e9).toUInt64.toNat
+            cacheMode := if entry.spec.config.minTotalSeconds == 0 then .cold else .warm } }
   let cfg := override.apply spec.config
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
