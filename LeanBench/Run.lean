@@ -92,6 +92,8 @@ Schema-compatibility contract (see [`https://kim-em.github.io/lean-bench/Result-
   budget tags, …) without rewriting every reader. -/
 def parseChildRow (line : String) : Except String DataPoint := do
   let json ← Json.parse line
+  if (json.getObjValAs? Bool "profile_kernel").toOption == some true then
+    throw "kernel profile rows are not scientific measurements"
   Schema.checkVersion json
   Schema.checkKind Schema.kindParametric json
   -- `function` is required by the schema for external readers, even
@@ -188,6 +190,7 @@ def spawnWithCap (exe : String) (args : Array String)
   let child ← IO.Process.spawn {
     cmd := exe
     args := args
+    env := #[("LEAN_BENCH_PROFILE_KERNEL", none)]
     stdout := .piped
     stderr := .piped
     stdin := .null
@@ -675,6 +678,8 @@ def runBenchmark (name : Lean.Name) (override : ConfigOverride := {})
     Same schema-compatibility contract as `parseChildRow`. -/
 def parseFixedChildRow (line : String) : Except String FixedDataPoint := do
   let json ← Json.parse line
+  if (json.getObjValAs? Bool "profile_kernel").toOption == some true then
+    throw "kernel profile rows are not scientific measurements"
   Schema.checkVersion json
   Schema.checkKind Schema.kindFixed json
   let _ ← json.getObjValAs? String "function"

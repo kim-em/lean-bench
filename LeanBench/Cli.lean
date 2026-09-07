@@ -169,6 +169,13 @@ output (perf record's perf.data, perf stat's summary, samply's
 server URL, time -v's resource usage, …) lands directly on the user's
 terminal alongside the child's JSONL row.
 
+Both parametric and fixed registrations are supported. Operation-only regions
+exclude result consumption; rows carry profile_kernel=true and cannot be used
+as scientific baselines. Clock and boxed IO dispatch overhead remains inside
+the region. Warm tuning uses whole-batch wall time; reported durations sum the
+operation regions. Sidecars are capped at 100000 regions: use a larger input
+or shorter capture if this limit is reached.
+
 Single-shot by design: profile one param at a time. No ladder, no
 verdict, no kill-on-cap (profilers can be slow to flush their own
 output). The benchmark's declared cacheMode is honoured — pin

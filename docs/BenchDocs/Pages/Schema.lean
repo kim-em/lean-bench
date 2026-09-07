@@ -34,6 +34,13 @@ Readers MUST reject rows whose `kind` mismatches the parser
 
 # Versioning
 
+Profiling-only rows additionally carry `"profile_kernel":true`. Their kind
+still matches the registration (`fixed` uses `repeat_index:0`), but their
+durations sum operation-only regions, excluding result consumption. They are
+not scientific samples: the scientific parsers reject them. Optional profile
+keys are listed separately in `Schema.optionalProfileKeys`; ordinary writer
+key sets do not change. External baseline importers must also reject this flag.
+
 Every row carries a top-level integer `schema_version`. The current
 version is *1*.
 

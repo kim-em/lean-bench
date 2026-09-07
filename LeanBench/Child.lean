@@ -8,6 +8,8 @@ public import LeanBench.RunEnv
 public import LeanBench.Schema
 public import LeanBench.TimedRegions
 
+public import LeanBench.KernelProfile
+
 public section
 
 /-!
@@ -139,7 +141,8 @@ def emitRow
     (resultHash : Option UInt64) (status : Status) (env : Env)
     (mem : MemStats := {})
     (cacheMode : CacheMode := .warm)
-    (errorMsg? : Option String := none) :
+    (errorMsg? : Option String := none)
+    (kernelProfile : Bool := false) (fixedProfile : Bool := false) :
     IO Unit := do
   -- Synthesized error rows pass `innerRepeats := 0`. `0/0 = NaN` isn't
   -- valid JSON, so emit `null` for the derived field; real measurement
@@ -150,9 +153,9 @@ def emitRow
   let row :=
     "{" ++ String.intercalate "," [
       s!"\"schema_version\":{Schema.schemaVersion}",
-      s!"\"kind\":{jsonStr Schema.kindParametric}",
+      s!"\"kind\":{jsonStr (if fixedProfile then Schema.kindFixed else Schema.kindParametric)}",
       s!"\"function\":{jsonStr function.toString}",
-      s!"\"param\":{param}",
+      (if fixedProfile then "\"repeat_index\":0" else s!"\"param\":{param}"),
       s!"\"inner_repeats\":{innerRepeats}",
       s!"\"total_nanos\":{totalNanos}",
       s!"\"per_call_nanos\":{perCallStr}",
@@ -163,7 +166,7 @@ def emitRow
       s!"\"alloc_bytes\":{jsonOptNat mem.allocBytes}",
       s!"\"peak_rss_kb\":{jsonOptNat mem.peakRssKb}",
       jsonEnvFragment env
-    ] ++ "}"
+    ] ++ (if kernelProfile then ",\"profile_kernel\":true" else "") ++ "}"
   IO.println row
 
 /-- Top-level child entry point.
@@ -197,6 +200,38 @@ def runChildMode (benchName : Lean.Name) (param targetNanos : Nat)
   let env ← match env? with
     | some env => pure env
     | none     => RunEnv.capture
+  if (← IO.getEnv "LEAN_BENCH_PROFILE_KERNEL") == some "1" then
+    let fixed? ← findFixedRuntimeEntry benchName
+    try
+      let some runner := (← kernelRegistry.get).get? benchName
+        | throw (IO.userError s!"no kernel profiling runner: {benchName}; use setup_benchmark/setup_fixed_benchmark or registerKernel with manual registrations")
+      if let some fixed := fixed? then
+        if fixed.spec.config.warmupFirstIter then
+          let _ ← fixed.runner 1
+      let loop ← runner param
+      let kernelTotal ← IO.mkRef (0 : Nat)
+      let wallLoop := fun count => do
+        let t0 ← IO.monoNanosNow
+        let (kernel, hash) ← loop count
+        let t1 ← IO.monoNanosNow
+        kernelTotal.set kernel
+        pure (t1 - t0, hash)
+      let (count, total, hash) ← match cacheMode with
+        | .warm => do
+          let (count, _, hash) ← autoTune wallLoop targetNanos
+          pure (count, ← kernelTotal.get, hash)
+        | .cold => do
+          let (t, h) ← loop 1
+          pure (1, t, h)
+      let mem ← MemStats.capture
+      emitRow benchName param count total hash .ok env (mem := mem) (cacheMode := cacheMode)
+        (kernelProfile := true) (fixedProfile := fixed?.isSome)
+      return 0
+    catch e =>
+      emitRow benchName param 0 0 none (.error e.toString) env
+        (cacheMode := cacheMode) (errorMsg? := some e.toString) (kernelProfile := true)
+        (fixedProfile := fixed?.isSome)
+      return 1
   match ← findRuntimeEntry benchName with
   | none =>
     emitRow benchName param 0 0 none

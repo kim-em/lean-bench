@@ -42,6 +42,17 @@ setup_benchmark tinyFn n => n where {
 
 end LeanBench.Test.Profile
 
+namespace LeanBench.Test.Profile
+
+def fixedPure (_ : Unit) : UInt64 := 17
+def fixedIO (_ : Unit) : IO UInt64 := pure 17
+def fixedLegacy : IO UInt64 := pure 17
+setup_fixed_benchmark fixedPure
+setup_fixed_benchmark fixedIO
+setup_fixed_benchmark fixedLegacy
+
+end LeanBench.Test.Profile
+
 private def tinyName : Lean.Name := `LeanBench.Test.Profile.tinyFn
 
 /-! ## Unit tests on the argv-assembly helpers -/
@@ -172,13 +183,110 @@ def testProfileSmokeViaEnv : IO UInt32 := do
 
 /-! ## Driver -/
 
+def testKernelLoop : IO UInt32 := do
+  let counter ← IO.mkRef (0 : Nat)
+  let call := fun () => do
+    counter.modify (· + 1)
+    pure (← counter.get).toUInt64
+  let last ← kernelLoop call id true
+  unless (← last 0).2 == none && (← counter.get) == 0 do
+    throw (IO.userError "zero kernel count ran the operation")
+  unless (← last 3).2 == some 3 && (← counter.get) == 3 do
+    throw (IO.userError "kernel loop must run and consume every result")
+  let first ← kernelLoop call id true true
+  unless (← first 3).2 == some 4 && (← counter.get) == 6 do
+    throw (IO.userError "fixed kernel loop must retain its first result hash")
+  let unhashable ← kernelLoop call id false
+  unless (← unhashable 1).2 == none && (← counter.get) == 7 do
+    throw (IO.userError "unhashable kernel result was not consumed")
+  IO.println "  ok  kernelLoop consumption and hash semantics"
+  return 0
+
+def testFixedProfiles : IO UInt32 := do
+  if System.Platform.isWindows then return 0
+  let exe ← LeanBench.ownExe
+  for name in ["fixedPure", "fixedIO", "fixedLegacy"] do
+    let fullName := "LeanBench.Test.Profile." ++ name
+    let proc ← IO.Process.output {
+      cmd := exe
+      args := #["profile", fullName, "--profiler", "/usr/bin/env",
+        "--target-inner-nanos", "1000000"] }
+    unless proc.exitCode == 0 && (proc.stdout.splitOn "\"status\":\"ok\"").length > 1 do
+      throw (IO.userError s!"fixed profile failed: {name}: {proc.stdout} {proc.stderr}")
+    let .ok row := Lean.Json.parse proc.stdout.trimAscii.toString
+      | throw (IO.userError "invalid fixed profile JSON")
+    unless (row.getObjValAs? String "kind").toOption == some "fixed" &&
+        (row.getObjValAs? Nat "repeat_index").toOption == some 0 &&
+        (row.getObjValAs? Bool "profile_kernel").toOption == some true do
+      throw (IO.userError "fixed profile lost its kind or profiling marker")
+    if (parseFixedChildRow proc.stdout.trimAscii.toString).isOk then
+      throw (IO.userError "scientific parser accepted a kernel-only fixed row")
+  IO.println "  ok  fixed profiling for all callable shapes"
+  return 0
+
+def testKernelRegions : IO UInt32 := IO.FS.withTempFile fun handle path => do
+  handle.flush
+  let proc ← IO.Process.output {
+    cmd := (← LeanBench.ownExe)
+    args := #["_child", "--bench", tinyName.toString, "--param", "5",
+      "--cache-mode", "cold"]
+    env := #[("LEAN_BENCH_PROFILE_KERNEL", some "1"),
+      ("LEAN_BENCH_TIMED_REGIONS_SIDECAR", some path.toString)] }
+  unless proc.exitCode == 0 do
+    throw (IO.userError s!"kernel child failed: {proc.stdout} {proc.stderr}")
+  let lines := (← IO.FS.readFile path).splitOn "\n" |>.filter (! ·.isEmpty)
+  unless lines.length == 2 do
+    throw (IO.userError s!"cold kernel must emit one header and one operation: {lines}")
+  unless ((lines[1]!).splitOn "\"label\":\"kernel\"").length == 2 do
+    throw (IO.userError "kernel region label missing")
+  unless (proc.stdout.splitOn "\"profile_kernel\":true").length == 2 do
+    throw (IO.userError "kernel profile row must be explicitly labelled")
+  let .ok row := Lean.Json.parse proc.stdout.trimAscii.toString
+    | throw (IO.userError "invalid kernel profile row")
+  let .ok digest := row.getObjValAs? String "result_hash" >>= Schema.parseHexU64
+    | throw (IO.userError "missing kernel result hash")
+  unless digest == hash (LeanBench.Test.Profile.tinyFn 5) do
+    throw (IO.userError "kernel profiling changed the operation result")
+  if (parseChildRow proc.stdout.trimAscii.toString).isOk then
+    throw (IO.userError "scientific parser accepted a kernel-only parametric row")
+  IO.println "  ok  kernel regions and result agreement"
+  return 0
+
+def testKernelException : IO UInt32 := IO.FS.withTempFile fun handle path => do
+  handle.flush
+  let proc ← IO.Process.output {
+    cmd := (← LeanBench.ownExe)
+    args := #["_test_kernel_exception"]
+    env := #[("LEAN_BENCH_TIMED_REGIONS_SIDECAR", some path.toString)] }
+  unless proc.exitCode == 0 do throw (IO.userError proc.stderr)
+  let lines := (← IO.FS.readFile path).splitOn "\n" |>.filter (! ·.isEmpty)
+  unless lines.length == 2 do
+    throw (IO.userError "completed kernel region was not flushed on exception")
+  IO.println "  ok  kernel exception flushing"
+  return 0
+
+def testAmbientIsolation : IO UInt32 := do
+  if System.Platform.isWindows then return 0
+  let proc ← IO.Process.output {
+    cmd := (← LeanBench.ownExe)
+    args := #["_test_ambient"]
+    env := #[("LEAN_BENCH_PROFILE_KERNEL", some "1")] }
+  unless proc.exitCode == 0 do throw (IO.userError s!"{proc.stdout} {proc.stderr}")
+  IO.println "  ok  ordinary spawn removes ambient kernel profiling"
+  return 0
+
 def runTests : IO UInt32 := do
   let mut anyFail : UInt32 := 0
   for t in
     [ testTokensSplits,
       testBuildArgv,
       testChildArgs,
-      testProfileSmokeViaEnv ]
+      testProfileSmokeViaEnv,
+      testKernelLoop,
+      testFixedProfiles,
+      testKernelRegions,
+      testKernelException,
+      testAmbientIsolation ]
   do
     let code ← t
     if code != 0 then anyFail := 1
@@ -191,6 +299,22 @@ def runTests : IO UInt32 := do
     the profile path). The `_child` first arg distinguishes them. -/
 def main (args : List String) : IO UInt32 :=
   match args with
+  | "_test_kernel_exception" :: _ => do
+    let calls ← IO.mkRef (0 : Nat)
+    let loop ← kernelLoop (fun () => do
+      calls.modify (· + 1)
+      if (← calls.get) == 2 then throw (IO.userError "intentional")
+      pure (17 : UInt64)) id true
+    try
+      let _ ← loop 3
+      return 1
+    catch _ => return 0
+  | "_test_ambient" :: _ => do
+    let (code, out, err, killed) ← spawnWithCap (← LeanBench.ownExe)
+      #["_child", "--bench", tinyName.toString, "--param", "5", "--cache-mode", "cold"] 5000
+    unless code == 0 && !killed && (parseChildRow out.trimAscii.toString).isOk do
+      throw (IO.userError s!"ambient flag contaminated scientific row: {out} {err}")
+    return 0
   | "_child" :: _ => LeanBench.Cli.dispatch args
   | "_probe_floor" :: _ => LeanBench.Cli.dispatch args
   | "profile" :: _ => LeanBench.Cli.dispatch args
