@@ -100,6 +100,23 @@ profile NAME --profiler "perf record -g --"`.
 See the [deployed quickstart](https://kim-em.github.io/lean-bench/Quickstart/) and
 [the Profiling page](https://kim-em.github.io/lean-bench/Profiling/).
 
+`profile` supports both parametric and fixed registrations. It uses a separate
+operation-only runner: each complete result is hashed and consumed after the
+operation's end timestamp. Ordinary `run`, `compare`, and `verify` retain their
+existing operation-plus-hash loops and timings. Profiling rows carry
+`"profile_kernel":true` and are not scientific benchmark measurements.
+Fixed profiles use `--target-inner-nanos` to size the capture, and honor
+`warmupFirstIter` before collecting regions.
+
+For timed-region filtering, set `LEAN_BENCH_TIMED_REGIONS_SIDECAR` to a JSONL
+path (optionally containing `%p`) and retain regions labelled `kernel`.
+External orchestrators that invoke `_child` directly also set
+`LEAN_BENCH_PROFILE_KERNEL=1`; without it, the existing whole-loop sidecar
+labels and behavior are unchanged. Kernel profiles emit one region per call,
+so choose a representative operation long enough for sampling, not a tiny
+accessor whose clock/dispatch overhead exceeds its work. Result destruction,
+hashing, preparation, sidecar writes, and autotuner gaps are outside regions.
+
 ## Fixed-problem benchmarks
 
 For workloads with a single canonical input — "this hard problem

@@ -111,13 +111,21 @@ def profileChildArgs (spec : BenchmarkSpec) (param : Nat) : Array String :=
     caller surfaces the code as the parent process's exit code. -/
 def runProfile (name : Lean.Name) (param : Nat) (profilerCmd : String)
     (override : ConfigOverride := {}) : IO UInt32 := do
-  let some entry ← findRuntimeEntry name
-    | throw (.userError s!"unregistered benchmark: {name}")
-  let cfg := override.apply entry.spec.config
+  let spec ← match ← findRuntimeEntry name with
+    | some entry => pure entry.spec
+    | none =>
+      match ← findFixedRuntimeEntry name with
+      | none => throw (.userError s!"unregistered benchmark: {name}")
+      | some entry => pure {
+          name := entry.spec.name
+          complexityFormula := "fixed profile"
+          hashable := entry.spec.hashable
+          config := { targetInnerNanos := 1000000000 } }
+  let cfg := override.apply spec.config
   match cfg.validate with
   | .error msg => throw (.userError s!"{name}: {msg}")
   | .ok () => pure ()
-  let spec := { entry.spec with config := cfg }
+  let spec := { spec with config := cfg }
   let exe ← ownExe
   let childArgs := profileChildArgs spec param
   match buildProfileArgv profilerCmd exe childArgs with
@@ -137,6 +145,7 @@ def runProfile (name : Lean.Name) (param : Nat) (profilerCmd : String)
       stdout := .inherit
       stderr := .inherit
       stdin  := .null
+      env := #[("LEAN_BENCH_PROFILE_KERNEL", some "1")]
     }
     let exit ← child.wait
     return exit

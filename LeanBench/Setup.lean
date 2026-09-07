@@ -3,6 +3,7 @@ module
 public import Lean
 public import LeanBench.Core
 public import LeanBench.Env
+public import LeanBench.KernelProfile
 
 public section
 
@@ -270,6 +271,17 @@ where
             config := $cfgIdent }
           $rIdent
           $cIdent)
+    let consume : Term ← if isHashable then `(fun r => Hashable.hash r)
+      else `(fun r => Hashable.hash (sizeOf r))
+    let kernel : Term ← match prepId? with
+      | none => `(fun param => LeanBench.kernelLoop
+          (fun () => pure ($fnId param)) $consume $isHashableSyn)
+      | some prepId => `(fun param => do
+          let s := $prepId param
+          LeanBench.blackBox (Hashable.hash s)
+          LeanBench.kernelLoop (fun () => pure ($fnId s)) $consume $isHashableSyn)
+    elabCommand <| ← `(command|
+      initialize LeanBench.registerKernel $fnNameSyn $kernel)
 
 /-! ## `setup_fixed_benchmark` — fixed-problem registration
 
@@ -490,5 +502,14 @@ where
             hashable := $isHashableSyn
             config := $cfgIdent }
           $rIdent)
+    let consume : Term ← if isHashable then `(fun r => Hashable.hash r)
+      else `(fun r => Hashable.hash (sizeOf r))
+    let call : Term ← match shape with
+      | .pureUnit => `(fun () => pure ($fnId ()))
+      | .ioUnit => `(fun () => (($fnId : Unit → IO _) ()))
+      | .io => `(fun () => ($fnId : IO _))
+    elabCommand <| ← `(command|
+      initialize LeanBench.registerKernel $fnNameSyn (fun _ =>
+        LeanBench.kernelLoop $call $consume $isHashableSyn true))
 
 end LeanBench

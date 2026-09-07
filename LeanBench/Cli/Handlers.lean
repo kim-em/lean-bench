@@ -328,11 +328,9 @@ def runProfileCmd (p : Cli.Parsed) : IO UInt32 := do
     return 1
   match ← findRuntimeEntry name with
   | none =>
-    -- Fixed-benchmark profiling is not wired up yet — issue #13.
     match ← findFixedRuntimeEntry name with
     | some _ =>
-      IO.eprintln s!"profile: {name} is a fixed benchmark; profiling for fixed benchmarks is not yet supported (issue #13)"
-      return 1
+      LeanBench.runProfile name param profilerCmd (configOverrideFromParsed p)
     | none =>
       IO.eprintln s!"profile: unregistered benchmark: {name}"
       return 1
